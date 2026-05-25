@@ -1,0 +1,139 @@
+# =============================================================================
+# OpenVelo — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+
+# Root-level lockfile is not needed (components have their own lockfiles)
+/package-lock.json
+
+# -----------------------------------------------------------------------------
+# Next.js build output
+# -----------------------------------------------------------------------------
+components/web-ui/.next/
+components/web-ui/out/
+
+# -----------------------------------------------------------------------------
+# General build / dist directories
+# -----------------------------------------------------------------------------
+dist/
+build/
+
+# -----------------------------------------------------------------------------
+# TypeScript build output (orchestrator & agent compile to dist/)
+# -----------------------------------------------------------------------------
+components/orchestrator/dist/
+components/agent/dist/
+
+# Also ignore any stale compiled artifacts left in src/ from the old convention
+components/orchestrator/src/*.js
+components/orchestrator/src/*.js.map
+components/orchestrator/src/*.d.ts
+components/orchestrator/src/*.d.ts.map
+components/agent/src/*.js
+components/agent/src/*.js.map
+components/agent/src/*.d.ts
+components/agent/src/*.d.ts.map
+
+# -----------------------------------------------------------------------------
+# TypeScript incremental build info
+# -----------------------------------------------------------------------------
+*.tsbuildinfo
+
+# -----------------------------------------------------------------------------
+# Environment & secrets
+# NOTE: .env.local files contain ADO PATs, GitHub tokens, and DB paths.
+#       Never commit these.
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# -----------------------------------------------------------------------------
+# Database files
+# The shared SQLite database is runtime state, not source code.
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Session secret — generated at runtime; deleting it invalidates all sessions
+openvelo.session
+
+# -----------------------------------------------------------------------------
+# Orchestrator runtime data
+# -----------------------------------------------------------------------------
+components/orchestrator/temp_data/
+orchestrator.sqlite
+
+# -----------------------------------------------------------------------------
+# Logs
+# -----------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+
+# -----------------------------------------------------------------------------
+# OS-generated files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Editor & IDE
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*.swo
+*~
+
+# -----------------------------------------------------------------------------
+# AI coding assistant local config
+# (settings.local.json, session caches, etc.)
+# -----------------------------------------------------------------------------
+.claude/
+.gemini/
+.copilot/
+
+# -----------------------------------------------------------------------------
+# Coverage & test output
+# -----------------------------------------------------------------------------
+coverage/
+.nyc_output/
+*.lcov
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+.cache/
+.parcel-cache/
+.turbo/
+.vercel/
+*.pid
+*.seed
+*.pid.lock
+.npm/

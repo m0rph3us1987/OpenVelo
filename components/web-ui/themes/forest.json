@@ -1,0 +1,25 @@
+{
+  "name": "Forest",
+  "colors": {
+    "background": "#111713",
+    "foreground": "#f1f4f2",
+    "card": "#191f1b",
+    "card-foreground": "#f1f4f2",
+    "popover": "#191f1b",
+    "popover-foreground": "#f1f4f2",
+    "primary": "#2eb873",
+    "primary-foreground": "#111713",
+    "secondary": "#29322c",
+    "secondary-foreground": "#f1f4f2",
+    "muted": "#29322c",
+    "muted-foreground": "#83958c",
+    "accent": "#2d8668",
+    "accent-foreground": "#f1f4f2",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#2e3831",
+    "input": "#2e3831",
+    "ring": "#2eb873",
+    "radius": "0.5rem"
+  }
+}

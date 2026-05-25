@@ -1,0 +1,6 @@
+# Ignore all content in this directory, but keep the directory itself tracked
+*
+!.gitignore
+!temp_data
+!SKILLS
+!SKILLS/**

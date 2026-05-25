@@ -1,0 +1,10 @@
+node_modules
+.next
+temp_data
+openvelo.sqlite
+openvelo.sqlite-shm
+openvelo.sqlite-wal
+*.log
+.git
+.gitignore
+README.md

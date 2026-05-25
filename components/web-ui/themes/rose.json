@@ -1,0 +1,25 @@
+{
+  "name": "Rose",
+  "colors": {
+    "background": "#181013",
+    "foreground": "#f4f1f2",
+    "card": "#21171a",
+    "card-foreground": "#f4f1f2",
+    "popover": "#21171a",
+    "popover-foreground": "#f4f1f2",
+    "primary": "#ed5e8e",
+    "primary-foreground": "#181013",
+    "secondary": "#35272c",
+    "secondary-foreground": "#f4f1f2",
+    "muted": "#35272c",
+    "muted-foreground": "#958389",
+    "accent": "#dd3ca7",
+    "accent-foreground": "#f4f1f2",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#3b2b30",
+    "input": "#3b2b30",
+    "ring": "#ed5e8e",
+    "radius": "0.5rem"
+  }
+}

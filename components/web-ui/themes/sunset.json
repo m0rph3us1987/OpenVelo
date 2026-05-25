@@ -1,0 +1,25 @@
+{
+  "name": "Sunset",
+  "colors": {
+    "background": "#1b120e",
+    "foreground": "#f5f2f0",
+    "card": "#231a15",
+    "card-foreground": "#f5f2f0",
+    "popover": "#231a15",
+    "popover-foreground": "#f5f2f0",
+    "primary": "#f47b25",
+    "primary-foreground": "#1b120e",
+    "secondary": "#372b25",
+    "secondary-foreground": "#f5f2f0",
+    "muted": "#372b25",
+    "muted-foreground": "#9d8c7b",
+    "accent": "#e64d19",
+    "accent-foreground": "#f5f2f0",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#3d3029",
+    "input": "#3d3029",
+    "ring": "#f47b25",
+    "radius": "0.5rem"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Ocean",
+  "colors": {
+    "background": "#0e121b",
+    "foreground": "#f0f3f5",
+    "card": "#151a23",
+    "card-foreground": "#f0f3f5",
+    "popover": "#151a23",
+    "popover-foreground": "#f0f3f5",
+    "primary": "#19a1e6",
+    "primary-foreground": "#0e121b",
+    "secondary": "#252b37",
+    "secondary-foreground": "#f0f3f5",
+    "muted": "#252b37",
+    "muted-foreground": "#7b929d",
+    "accent": "#1fa1ad",
+    "accent-foreground": "#f0f3f5",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#29303d",
+    "input": "#29303d",
+    "ring": "#19a1e6",
+    "radius": "0.5rem"
+  }
+}

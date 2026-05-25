@@ -1,0 +1,25 @@
+{
+  "name": "Slate",
+  "colors": {
+    "background": "#131820",
+    "foreground": "#f0f2f4",
+    "card": "#1a2028",
+    "card-foreground": "#f0f2f4",
+    "popover": "#1a2028",
+    "popover-foreground": "#f0f2f4",
+    "primary": "#5c8fd6",
+    "primary-foreground": "#131820",
+    "secondary": "#2a313c",
+    "secondary-foreground": "#f0f2f4",
+    "muted": "#2a313c",
+    "muted-foreground": "#7e8a9a",
+    "accent": "#406abf",
+    "accent-foreground": "#f0f2f4",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#2e3642",
+    "input": "#2e3642",
+    "ring": "#5c8fd6",
+    "radius": "0.5rem"
+  }
+}

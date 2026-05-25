@@ -1,0 +1,51 @@
+# OpenVelo docker-compose — Linux / Windows-with-Linux-containers mode
+#
+# Prerequisites:
+#   - Docker Desktop with Linux containers mode enabled
+#   - Copy .env.example to .env and fill in your host paths
+#   - Build images: npm run docker-build-all-linux
+#
+# Usage:
+#   docker compose up -d
+
+name: openvelo-web-ui
+
+services:
+  web-ui:
+    container_name: openvelo-web-ui
+    build:
+      context: ./components/web-ui
+      dockerfile: Dockerfile
+    image: openvelo-webui:linux
+    ports:
+      - "4500:3000"
+    volumes:
+      # Single data directory — auto-defaults to ./data next to the compose file.
+      # Override via OPENVELO_DATA_DIR in .env (must be an absolute path on the host).
+      # Contains openvelo.sqlite and temp_data/
+      - ${OPENVELO_DATA_DIR:-./data}:/openvelo/data
+      # Docker socket — allows web-ui to spawn orchestrator containers (DooD)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # OpenCode credentials from host — read/write (allows containers to access and store auth)
+      - ${HOME}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json:rw
+      - ${HOME}/.config/opencode:/root/.config/opencode:rw
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - OPENVELO_DB_PATH=/openvelo/data/openvelo.sqlite
+      - OPENVELO_TEMP_DATA_PATH=/openvelo/data/temp_data
+      # HOST path used when constructing agent container bind mounts
+      - OPENVELO_TEMP_DATA_HOST_PATH=${OPENVELO_DATA_DIR:-${PWD}/data}/temp_data
+      - OPENVELO_SKILLS_HOST_PATH=${OPENVELO_DATA_DIR:-${PWD}/data}/SKILLS
+      - OPENVELO_CONTAINER_MODE=true
+      - ORCHESTRATOR_IMAGE=openvelo-orchestrator:linux
+      - OPENVELO_HOST_HOME=${HOME}
+      # Orchestrators dial back to web-ui over this URL
+      - WEB_UI_URL=ws://host.docker.internal:4500
+    extra_hosts:
+      # Required on Linux so host.docker.internal resolves to the Docker host
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+# Orchestrator containers are spawned dynamically by the web-ui via dockerode.
+# They are NOT defined here — they appear and disappear as projects are started/stopped.

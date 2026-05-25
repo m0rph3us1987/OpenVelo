@@ -1,0 +1,25 @@
+{
+  "name": "Amber",
+  "colors": {
+    "background": "#1b160e",
+    "foreground": "#f5f3f0",
+    "card": "#231e15",
+    "card-foreground": "#f5f3f0",
+    "popover": "#231e15",
+    "popover-foreground": "#f5f3f0",
+    "primary": "#f4a825",
+    "primary-foreground": "#1b160e",
+    "secondary": "#373125",
+    "secondary-foreground": "#f5f3f0",
+    "muted": "#373125",
+    "muted-foreground": "#9d927b",
+    "accent": "#e68019",
+    "accent-foreground": "#f5f3f0",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#3d3629",
+    "input": "#3d3629",
+    "ring": "#f4a825",
+    "radius": "0.5rem"
+  }
+}

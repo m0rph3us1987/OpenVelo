@@ -1,0 +1,25 @@
+{
+  "name": "Midnight",
+  "colors": {
+    "background": "#0e0b14",
+    "foreground": "#f2f0f4",
+    "card": "#15111d",
+    "card-foreground": "#f2f0f4",
+    "popover": "#15111d",
+    "popover-foreground": "#f2f0f4",
+    "primary": "#9167e4",
+    "primary-foreground": "#0e0b14",
+    "secondary": "#262131",
+    "secondary-foreground": "#f2f0f4",
+    "muted": "#262131",
+    "muted-foreground": "#8c8198",
+    "accent": "#a347d1",
+    "accent-foreground": "#f2f0f4",
+    "destructive": "#7f1d1d",
+    "destructive-foreground": "#fafafa",
+    "border": "#2b2537",
+    "input": "#2b2537",
+    "ring": "#9167e4",
+    "radius": "0.5rem"
+  }
+}
