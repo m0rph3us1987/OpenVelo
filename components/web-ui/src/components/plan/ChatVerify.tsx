@@ -9,10 +9,14 @@ interface ChatVerifyProps {
   chat: ChatSession;
   onHeaderInfo?: (info: { title: string; showSpinner: boolean }) => void;
   viewOnly?: boolean;
+  overrideSubStage?: string;
 }
 
-export function ChatVerify({ chat, onHeaderInfo, viewOnly = false }: ChatVerifyProps) {
-  const { subStage, progress, errorType, isConnected } = useStageWebSocket({ chatId: chat.id, stage: 'verify', enabled: !viewOnly });
+export function ChatVerify({ chat, onHeaderInfo, viewOnly = false, overrideSubStage }: ChatVerifyProps) {
+  const { subStage: wsSubStage, progress, errorType, isConnected } = useStageWebSocket({ chatId: chat.id, stage: 'verify', enabled: !viewOnly });
+  
+  const subStage = viewOnly ? (overrideSubStage ?? chat.sub_stage) : (wsSubStage || chat.sub_stage);
+  
   const effectiveErrorType = errorType ?? chat.error_type;
   const [analysisKey, setAnalysisKey] = React.useState(0);
   const [retrying, setRetrying] = React.useState(false);

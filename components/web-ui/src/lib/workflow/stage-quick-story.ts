@@ -156,6 +156,7 @@ async function handleGenerate(chatId: number, chatDir: string, repoDir: string, 
     transitionTo(chatId, 'quick_story', 'error');
     return;
   }
+  const requirementContent = fs.readFileSync(requirementPath, 'utf-8');
 
   const promptTemplate = fs.readFileSync(
     path.join(process.cwd(), 'prompts', 'plan-quickstory.md'),
@@ -168,7 +169,7 @@ async function handleGenerate(chatId: number, chatDir: string, repoDir: string, 
     .replace(/{SKILLS_DIR}/g, getSkillsDir())
     .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
     .replace(/{REPO_CONTEXT}/g, repoContext)
-    .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath);
+    .replace(/{REQUIREMENT_CONTENT}/g, requirementContent);
 
   loggerService.appendVerbose(chatId, 'workflow:quick-story', 'Sending quick story prompt');
 

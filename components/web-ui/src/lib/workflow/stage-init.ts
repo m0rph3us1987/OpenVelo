@@ -104,19 +104,25 @@ export async function handleInit(chatId: number): Promise<void> {
 
       loggerService.appendVerbose(chatId, 'workflow:init', `Repository cloned successfully`);
 
-      // Step 4: Update sub_stage to 'starting' before spawning opencode server
-      transitionTo(chatId, 'init', 'starting');
-      stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'starting' });
+      const branch = project.staging_branch || 'staging';
+      loggerService.appendVerbose(chatId, 'workflow:init', `Checking out branch: ${branch}`);
+      const checkoutProc = spawn('git', ['checkout', branch], { cwd: repoDir, stdio: 'ignore' });
+      
+      checkoutProc.on('close', () => {
+        // Step 4: Update sub_stage to 'starting' before spawning opencode server
+        transitionTo(chatId, 'init', 'starting');
+        stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'starting' });
 
-      // Step 5: Spawn opencode server
-      const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-      client.ensureStarted().then(() => {
-        // Step 6: Update stage to 'analyzing'
-        transitionTo(chatId, 'analyzing', '');
-        resolve();
-      }).catch((err) => {
-        loggerService.appendVerbose(chatId, 'workflow:init', `Failed to spawn opencode server: ${err.message}`);
-        reject(err);
+        // Step 5: Spawn opencode server
+        const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
+        client.ensureStarted().then(() => {
+          // Step 6: Update stage to 'analyzing'
+          transitionTo(chatId, 'analyzing', '');
+          resolve();
+        }).catch((err) => {
+          loggerService.appendVerbose(chatId, 'workflow:init', `Failed to spawn opencode server: ${err.message}`);
+          reject(err);
+        });
       });
     });
   });

@@ -39,6 +39,21 @@ export function ChatList({ projectId, onChatSelect, onChatDataUpdated, selectedC
     }
   }, [pendingSelectChat]);
 
+  const prevSelectedStr = React.useRef<string>('');
+
+  React.useEffect(() => {
+    if (selectedChatId) {
+      const current = chats.find(c => c.id === selectedChatId);
+      if (current) {
+        const key = `${current.stage}:${current.sub_stage}:${current.error_type}`;
+        if (prevSelectedStr.current !== key) {
+          prevSelectedStr.current = key;
+          onChatDataUpdated?.(current);
+        }
+      }
+    }
+  }, [chats, selectedChatId, onChatDataUpdated]);
+
   async function fetchChats() {
     try {
       const res = await fetch(`/api/chats?projectId=${projectId}`);
@@ -60,18 +75,9 @@ export function ChatList({ projectId, onChatSelect, onChatDataUpdated, selectedC
   useChatListWebSocket(projectId, {
     onChatUpdated: (chatId, stage, sub_stage, error_type) => {
       setChats((prev) => {
-        const updated = prev.map((chat) =>
+        return prev.map((chat) =>
           chat.id === chatId ? { ...chat, stage, sub_stage, error_type } : chat
         );
-        if (chatId === selectedChatId) {
-          const updatedChat = updated.find((c) => c.id === chatId);
-          if (updatedChat) {
-            requestAnimationFrame(() => {
-              onChatDataUpdated?.(updatedChat);
-            });
-          }
-        }
-        return updated;
       });
     },
     onChatCreated: (chat) => {

@@ -10,11 +10,14 @@ First, rely on the REPOSITORY CONTEXT above — it already summarizes the codeba
 REPOSITORY CONTEXT:
 {REPO_CONTEXT}
 
-REQUIREMENT FILE:
-{REQUIREMENT_MD_PATH}
+REQUIREMENT FILE CONTENT:
+{REQUIREMENT_CONTENT}
 
 SKILLS DIRECTORY: {SKILLS_DIR}
 You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into the stories you generate. The implementing agent will follow these rules — your stories and acceptance criteria must be compatible.
+
+CRITICAL INSTRUCTION FOR TOOL USE:
+Before generating your final JSON output, you MUST use your file reading tool to explore the SKILLS DIRECTORY. Do NOT just output the JSON immediately. Read the skills first!
 
 ---
 
@@ -42,6 +45,7 @@ The output must be a single JSON object containing one epic, one feature (belong
 - The story must represent an independently deliverable slice of functionality.
 - Include concrete, testable acceptance criteria.
 - Include all relevant business rules, constraints, and detail from the requirement verbatim.
+- The story description MUST NOT be a single-sentence summary. It must be highly detailed.
 
 ### Build Continuity
 - The story must leave the codebase in a buildable state.
@@ -75,7 +79,7 @@ Output ONLY a valid JSON object — no text before, no text after, no markdown c
     "feature_title": "concise feature title",
     "story_index": 0,
     "title": "concise, action-oriented story title",
-    "description": "clear description of the user-facing behaviour or system outcome; include all business rules, constraints, and any detail prescribed in the requirement verbatim — do not invent implementation detail",
+    "description": "DETAILED description of the user-facing behaviour or system outcome. CRITICAL: Do NOT summarize the requirement into a single sentence. You MUST copy all business rules, constraints, UI layouts, and data models from the requirement verbatim into this field.",
     "acceptance_criteria": "numbered list of concrete, testable criteria; must include an explicit criterion about the unit test"
   }}
 }}
