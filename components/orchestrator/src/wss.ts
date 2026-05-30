@@ -219,7 +219,11 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                         error: payload.error,
                         timestamp: new Date().toISOString(),
                     });
-                    send({ type: 'job_retry', jobId });
+                    if (!payload.maxRetriesReached) {
+                        send({ type: 'job_retry', jobId });
+                    } else {
+                        console.log(`Job ${jobId} reached max retries, not retrying.`);
+                    }
                     ws.close();
                     return;
                 }

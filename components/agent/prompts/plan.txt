@@ -12,16 +12,19 @@ Before designing any new changes, check if the requested user story and features
 
 
 
-### Steps to execute:
-1. **Load Relevant Skills:** You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and incorporate their rules into your architectural plan. The implementer will follow these same rules — your plan must be compatible with them.
+1. **Load Relevant Skills & Architecture:**
+   - **SKILLS**: You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and incorporate their rules into your architectural plan.
+   - **ARCHITECTURE**: The Agent components use `{{REPO_PATH}}` as the placeholder for the absolute path to the repository. You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure your plan follows established conventions.
+   - The implementer will follow these exact same rules — your plan must be compatible with them.
 2. **Explore & Find:** Look through the repository. Identify existing folders, configurations, database schemas, API routes, and frontend views.
 3. **Trace the Data Flow:** Understand how data flows from the frontend/API layer down to the data access and database layers.
 4. **Identify Integration Patterns:**
    - Where are existing API endpoints defined?
    - What database/ORM is used?
    - How are tests written and organized? Locate at least one existing test file to serve as a syntax/mocking template.
-5. **Draft the Plan:** Save your findings and proposed architectural changes as a Markdown file exactly at `/tmp/IMPLEMENTATION_PLAN.md` inside your environment.
-6. When drafting the plan, use instructions from skills where/when appropriate.
+5. **Identify Required Tools & Dependencies:** Check what system tools, libraries, or dependencies will be needed for the project to run. Include them in your plan so the implementer knows to install them and update `.openvelo/setup.sh` accordingly.
+6. **Draft the Plan:** Save your findings and proposed architectural changes as a Markdown file exactly at `/tmp/IMPLEMENTATION_PLAN.md` inside your environment.
+7. When drafting the plan, use instructions from skills where/when appropriate.
 
 
 ### Your plan MUST follow this structure:
@@ -32,6 +35,7 @@ Before designing any new changes, check if the requested user story and features
 - **Codebase style & conventions:** (e.g. TypeScript, Express, Async/Await patterns)
 - **Data Layer:** (e.g. SQLite, Prisma, raw SQL, etc.)
 - **Test Framework & Mocking Template:** (e.g. Jest, using beforeEach database seeds. Located template at `tests/user.test.ts`)
+- **Required Tools & Dependencies:** (List any new system tools, global CLI utilities, or package dependencies required to implement this story)
 
 ## 2. Impacted Files
 - **To Modify:** (List paths to files you will edit and a brief 1-line reason why)

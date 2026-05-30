@@ -35,6 +35,7 @@ const PIPELINE_STAGES = [
   { key: 'implementing', label: 'Implementing' },
   { key: 'testing', label: 'Build & Test' },
   { key: 'reviewing', label: 'Review' },
+  { key: 'documenting', label: 'Documentation' },
   { key: 'pushing', label: 'Push' },
 ] as const;
 

@@ -41,6 +41,7 @@ export class WorkflowEngine {
     private sessionSetup: AgentSession = new AgentSession('setup');
     private sessionPlan: AgentSession = new AgentSession('plan');
     private sessionImplement: AgentSession = new AgentSession('implement');
+    private sessionDocument: AgentSession = new AgentSession('document');
 
     constructor() {
         this.workBranchName = `${this.checkpointBranch}-${Date.now()}`;
@@ -76,25 +77,48 @@ export class WorkflowEngine {
 
             let retries = 0;
             let success = false;
+            let forceNewImplementation = true;
+
             while (retries < CONFIG.MAX_RETRIES && !success) {
                 // Phase 1: Implement
-                console.log(`Implementation attempt ${retries + 1}/${CONFIG.MAX_RETRIES}`);
-                await this.implement(retries, CONFIG.MAX_RETRIES);
+                if (forceNewImplementation) {
+                    console.log(`Implementation attempt ${retries + 1}/${CONFIG.MAX_RETRIES}`);
+                    await this.implement(0, CONFIG.MAX_RETRIES);
+                    forceNewImplementation = false;
+                }
 
                 // Phase 2: Build & Test — re-test after each fix until pass or budget exhausted
                 let testPassed = false;
+                let testFailuresInARow = 0;
                 while (!testPassed && retries < CONFIG.MAX_RETRIES) {
                     console.log(`Testing attempt ${retries + 1}/${CONFIG.MAX_RETRIES}`);
                     const { passed, errorLog } = await this.test(retries, CONFIG.MAX_RETRIES);
 
                     if (passed) {
                         testPassed = true;
+                        testFailuresInARow = 0;
                     } else {
                         retries++;
+                        testFailuresInARow++;
+                        
                         if (retries >= CONFIG.MAX_RETRIES) break;
-                        console.error(`Tests failed. Retrying implementation... (${retries}/${CONFIG.MAX_RETRIES})`);
-                        await this.fixImplementation(`Build/Test failed with:\n${errorLog}\n\nFix all errors. Do not revert any previously applied fix.`, retries, CONFIG.MAX_RETRIES);
+                        
+                        if (testFailuresInARow >= 3) {
+                            console.warn("Tests failed 3 times. Escalating back to the Planner for a fresh plan...");
+                            await this.plan(`The previous implementation plan failed during testing 3 times. The latest test errors were:\n${errorLog}\n\nPlease draft a new, revised implementation plan that addresses these fundamental flaws or incompatibilities.`);
+                            testFailuresInARow = 0;
+                            this.sessionImplement = new AgentSession('implement');
+                            forceNewImplementation = true;
+                            break;
+                        } else {
+                            console.error(`Tests failed. Retrying implementation... (${retries}/${CONFIG.MAX_RETRIES})`);
+                            await this.fixImplementation(`Build/Test failed with:\n${errorLog}\n\nFix all errors. Do not revert any previously applied fix.`, retries, CONFIG.MAX_RETRIES);
+                        }
                     }
+                }
+
+                if (forceNewImplementation) {
+                    continue; // Skip review phase, restart outer loop with new plan
                 }
 
                 if (!testPassed) break;
@@ -120,12 +144,14 @@ export class WorkflowEngine {
 
             if (!success) throw new Error('Failed after max retries.');
 
+            await this.document();
             await this.finish();
             console.log('Workflow completed successfully.');
             messenger.sendFinish('success', { branch: this.workBranchName });
         } catch (err: any) {
             console.error(`Fatal Error: ${err.message}`);
-            messenger.sendFinish('error', { error: err.message });
+            const maxRetriesReached = err.message.includes('Max retries reached') || err.message.includes('Failed after max retries');
+            messenger.sendFinish('error', { error: err.message, maxRetriesReached });
         } finally {
             setTimeout(() => process.exit(0), 1000);
         }
@@ -169,50 +195,86 @@ export class WorkflowEngine {
         console.log('Updating package lists...');
         await runCommand('apt-get', ['update', '-y']);
 
-        const files = fs.readdirSync(CONFIG.REPO_PATH).filter(f => f !== '.git' && f !== '.gitkeep');
-        const isEmpty = files.length === 0;
-        const repoStateMsg = isEmpty ? 'Repository is empty (not scaffolded).' : 'Repository contains files.';
+        const setupShPath = path.join(CONFIG.REPO_PATH, '.openvelo', 'setup.sh');
+        
+        let buildRetries = 0;
+        let buildSuccess = false;
 
-        console.log('Analyzing required tools...');
-        const setupPrompt = this.renderPromptTemplate('setup.txt', {
-            STORY_PATH: CONFIG.STORY_PATH,
-            STORY_CONTENT: CONFIG.STORY_CONTENT,
-            REPO_PATH: CONFIG.REPO_PATH,
-            REPO_STATE_MSG: repoStateMsg,
-            JOB_ID: CONFIG.JOB_ID,
-            BUILD_CMD: CONFIG.BUILD_CMD || '(none)',
-            TEST_CMD: CONFIG.TEST_CMD || '(none)',
-            MAX_RETRIES: CONFIG.MAX_RETRIES.toString()
-        });
-
-        await this.sessionSetup.send(setupPrompt, CONFIG.BACKEND_MODEL);
-
-        const jobScriptPath = path.join(CONFIG.TOOLS_CACHE_DIR, `${CONFIG.JOB_ID}.sh`);
-        if (fs.existsSync(jobScriptPath)) {
-            const content = fs.readFileSync(jobScriptPath, 'utf-8');
-            if (content.trim() === 'NO_SETUP_NEEDED') {
-                fs.unlinkSync(jobScriptPath);
-                console.log('No tool installation needed.');
+        while (buildRetries < CONFIG.MAX_RETRIES && !buildSuccess) {
+            if (fs.existsSync(setupShPath)) {
+                console.log(`Running setup script: ${setupShPath}`);
+                await runCommand('bash', [setupShPath], CONFIG.REPO_PATH);
             } else {
-                const filtered = content
-                    .split('\n')
-                    .filter(line => !line.trim().startsWith('rm'))
-                    .join('\n');
-                fs.writeFileSync(jobScriptPath, filtered, 'utf-8');
-                console.log('Installing required tools...');
-                const { code } = await runCommand('bash', [jobScriptPath]);
-                if (code !== 0) {
-                    console.log(`Tool installation script exited with code ${code} — continuing anyway.`);
+                const openVeloDir = path.join(CONFIG.REPO_PATH, '.openvelo');
+                if (!fs.existsSync(openVeloDir)) {
+                    fs.mkdirSync(openVeloDir, { recursive: true });
                 }
             }
-        } else {
-            console.log('No tool installation script generated.');
+
+            let buildOutput = '';
+            let buildCode = 0;
+            if (CONFIG.BUILD_CMD) {
+                console.log(`Running build command: ${CONFIG.BUILD_CMD}`);
+                const res = await runCommand('bash', ['-c', CONFIG.BUILD_CMD], CONFIG.REPO_PATH);
+                buildCode = res.code ?? 1;
+                buildOutput = res.output;
+            }
+
+            if (buildCode !== 0) {
+                const files = fs.readdirSync(CONFIG.REPO_PATH).filter(f => !['.git', '.gitkeep', '.openvelo'].includes(f));
+                const isEmpty = files.length === 0;
+                const setupPrompt = this.renderPromptTemplate('setup.txt', {
+                    REPO_IS_EMPTY: isEmpty ? 'true' : 'false',
+                    BUILD_CMD: CONFIG.BUILD_CMD || '(none)',
+                    BUILD_OUTPUT: buildOutput.substring(0, 4000), // Avoid massive output
+                    SETUP_SH_PATH: setupShPath
+                });
+
+                const llmResponse = await this.sessionSetup.send(setupPrompt, CONFIG.BACKEND_MODEL);
+                const llmResponseStr = JSON.stringify(llmResponse);
+                
+                if (llmResponseStr.includes('EMPTY_PROJECT')) {
+                    console.log('LLM identified empty project build error. Proceeding safely...');
+                    buildSuccess = true;
+                } else if (llmResponseStr.includes('BUILD_ERROR')) {
+                    throw new Error('Max retries reached: Actual build logic error detected by LLM.');
+                } else if (llmResponseStr.includes('SETUP_ADJUSTED')) {
+                    console.log('LLM adjusted setup.sh. Committing changes...');
+                    await runCommand('git', ['add', '.openvelo/setup.sh'], CONFIG.REPO_PATH);
+                    await runCommand('git', ['commit', '-m', 'chore: adjust setup.sh for missing dependencies'], CONFIG.REPO_PATH);
+                    buildRetries++;
+                } else {
+                    throw new Error('Max retries reached: LLM could not resolve build error.');
+                }
+            } else {
+                buildSuccess = true;
+            }
+        }
+
+        if (!buildSuccess) {
+            throw new Error('Max retries reached: Build failed after max retries.');
+        }
+
+        const files = fs.readdirSync(CONFIG.REPO_PATH).filter(f => !['.git', '.gitkeep', '.openvelo'].includes(f));
+        const isEmpty = files.length === 0;
+
+        let testCode = 0;
+        if (CONFIG.TEST_CMD && !isEmpty) {
+            console.log(`Running test command: ${CONFIG.TEST_CMD}`);
+            const res = await runCommand('bash', ['-c', CONFIG.TEST_CMD], CONFIG.REPO_PATH);
+            testCode = res.code ?? 1;
+        } else if (isEmpty) {
+            console.log('Empty project detected. Skipping tests.');
+        }
+
+        if (testCode !== 0) {
+            throw new Error('Max retries reached: Tests failed. Repository not in a clean state.');
         }
 
         console.log('Setup phase complete.');
     }
 
-    private async plan(): Promise<void> {
+    private async plan(failureContext?: string): Promise<void> {
         messenger.sendStage('blueprinting');
         console.log('###############################################');
         console.log('###############################################');
@@ -221,11 +283,15 @@ export class WorkflowEngine {
         console.log('###############################################');
         console.log('Starting phase: PLAN & BLUEPRINT');
 
-        const planPrompt = this.renderPromptTemplate('plan.txt', {
+        let planPrompt = this.renderPromptTemplate('plan.txt', {
             STORY_CONTENT: CONFIG.STORY_CONTENT,
             REPO_PATH: CONFIG.REPO_PATH,
             SKILLS_PATH: this.skillsDir,
         });
+
+        if (failureContext) {
+            planPrompt += `\n\n### CRITICAL REVISION NEEDED\n\n${failureContext}\n\nPlease revise the plan to address these failures.`;
+        }
 
         await this.sessionPlan.send(planPrompt, CONFIG.BACKEND_MODEL);
 
@@ -538,6 +604,33 @@ export class WorkflowEngine {
             console.error(`Review verdict: ${verdict}. ${findings}`);
         }
         return { verdict, repairHint, findings };
+    }
+
+    private async document(): Promise<void> {
+        messenger.sendStage('documenting');
+        console.log('###############################################');
+        console.log('###############################################');
+        console.log('##########     DOCUMENTING    #################');
+        console.log('###############################################');
+        console.log('###############################################');
+        console.log('Starting phase: DOCUMENT');
+
+        const docPrompt = this.renderPromptTemplate('document.txt', {
+            STORY_CONTENT: CONFIG.STORY_CONTENT,
+            REPO_PATH: CONFIG.REPO_PATH,
+            SKILLS_PATH: this.skillsDir,
+            CHECKPOINT_BRANCH: this.checkpointBranch
+        });
+
+        await this.sessionDocument.send(docPrompt, CONFIG.BACKEND_MODEL);
+
+        console.log('Documentation phase complete. Staging documentation changes...');
+        await runCommand('git', ['add', '.openvelo/architecture'], CONFIG.REPO_PATH);
+        const statusRes = await runCommand('git', ['status', '--porcelain', '.openvelo/architecture'], CONFIG.REPO_PATH);
+        
+        if (statusRes.output.trim() !== '') {
+            await runCommand('git', ['commit', '-m', 'docs: update architecture documentation'], CONFIG.REPO_PATH);
+        }
     }
 
     private async finish() {

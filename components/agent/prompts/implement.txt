@@ -24,14 +24,14 @@ Browse the repository to verify the files and lines targeted by `/tmp/IMPLEMENTA
 
 **Identify mutable shared state** — specifically look for module-level singletons, static fields, global/process-level variables, shared database connections, in-memory caches, and DI container registrations. Check the mocking template identified in `/tmp/IMPLEMENTATION_PLAN.md` to see how these are handled and reset during tests.
 
-### Step 4 — Load Relevant Skills
-
-You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and strictly follow their rules. Do not guess the rules based on names.
+### Step 4 — Load Context & Standards
+- **SKILLS**: You MUST read the absolute path `/SKILLS/INDEX.md` using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and MUST follow those rules to the letter during implementation. 
+- **ARCHITECTURE**: The Agent components use `{{REPO_PATH}}` as the placeholder for the absolute path to the repository. You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow established conventions.
+- **PLAN**: Review `/tmp/IMPLEMENTATION_PLAN.md` which contains the architectural blueprint for this feature.
+- **IMPLEMENTER NOTES**: Review `{{REPO_PATH}}/.openvelo/implementer-notes.md`. These are notes from previous implementation attempts (from yourself or other agents) documenting specific technical deviations or issues encountered. Do not undo or overwrite fixes that were already documented here unless absolutely necessary.
 
 In case you are uncertain about APIs or tools, you are allowed to look online.
 Instead of guessing or inventing stuff that is not part of your knowledge, look online.
-
----
 
 ### Step 5 — Implement (Foundation First)
 Apply changes in this order:
@@ -73,8 +73,9 @@ If an acceptance criterion is technically impossible, contradictory, would break
 1. **YOU MUST keep `.gitignore` up to date** — whenever you create files for a new language, framework, or build tool, add the appropriate build artifact patterns to `.gitignore` (create it if missing). Common patterns: `.NET` → `bin/`, `obj/`; Node → `node_modules/`, `dist/`; Rust → `target/`; Go → compiled binaries. If you skip this, build artifacts will be committed to the repository — this is a FAILURE.
 2. **Follow the story exactly**, deviate only if the story makes no sense or contradicts best practices.
 3. **Create build configuration if needed** — if BUILD_CMD or TEST_CMD requires files not covered by the story (e.g., CMakeLists.txt, Makefile, conanfile.txt, package.json, Cargo.toml), you MUST create them. Story scope does not override build/test success.
-4. **Install Missing Dependencies/Tools** — if you encounter a missing system tool, compiler, or library, install it non-interactively (e.g., `apt-get install -y`, `npm install`, `export DEBIAN_FRONTEND=noninteractive`). This runs in a CI pipeline — no interactive prompts.
+4. **Install Missing Dependencies/Tools and Update setup.sh** — if you encounter a missing system tool, compiler, or library, or if the implementation plan dictates adding new dependencies/libraries that need installation, you MUST update `.openvelo/setup.sh` accordingly so the environment remains reproducible. Also install it non-interactively (e.g., `apt-get install -y`, `npm install`, `export DEBIAN_FRONTEND=noninteractive`). This runs in a CI pipeline — no interactive prompts.
 5. **Modifying existing tests is allowed** — if your implementation changes behaviour that existing tests rely on, you MUST update those tests to match the new behaviour. Do not leave broken tests behind.
+6. **Ensure Secure Dependencies** — It is critical that when using dependencies (e.g., running `npm install`, `pip install`, etc.), you only use dependencies that have NO known security vulnerabilities. Always check the output of package installation (like `npm audit` warnings). If vulnerabilities are found, you must fix them immediately (e.g. via `npm audit fix`, changing versions, etc.). This applies to all technologies and package managers.
 
 ---
 

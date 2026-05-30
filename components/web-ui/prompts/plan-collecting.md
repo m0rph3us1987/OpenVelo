@@ -17,6 +17,11 @@ REPOSITORY PATH: {REPO_DIR}
 SKILLS DIRECTORY: {SKILLS_DIR}
 You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into your output. Do not guess the rules based on names.
 
+ARCHITECTURE:
+You MUST use your file reading tool to check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
+
+The implementing agent will follow these skills and architectural rules — your output must be compatible.
+
 Use the following repository context to ground your questions in what already exists. If the repository is empty or new, treat this as a greenfield project. The repository is the primary source of context for understanding the current state of the project.
 
 REPOSITORY CONTEXT:

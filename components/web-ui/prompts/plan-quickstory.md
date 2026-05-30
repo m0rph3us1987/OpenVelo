@@ -14,7 +14,12 @@ REQUIREMENT FILE CONTENT:
 {REQUIREMENT_CONTENT}
 
 SKILLS DIRECTORY: {SKILLS_DIR}
-You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into the stories you generate. The implementing agent will follow these rules — your stories and acceptance criteria must be compatible.
+You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into the stories you generate.
+
+ARCHITECTURE:
+You MUST use your file reading tool to check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
+
+The implementing agent will follow these skills and architectural rules — your stories and acceptance criteria must be compatible.
 
 CRITICAL INSTRUCTION FOR TOOL USE:
 Before generating your final JSON output, you MUST use your file reading tool to explore the SKILLS DIRECTORY. Do NOT just output the JSON immediately. Read the skills first!

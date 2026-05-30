@@ -30,8 +30,9 @@ When `verdict` is `"pass"`, set `failure_category` to `null`, leave `failed_requ
 
 Follow these steps in order:
 
-### Step 1 — Load Relevant Skills
-You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into your review. Do not guess the rules based on names.
+### Step 1 — Load Relevant Skills & Architecture
+- **SKILLS**: You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into your review. Do not guess the rules based on names.
+- **ARCHITECTURE**: The Agent components use `{{REPO_PATH}}` as the placeholder for the absolute path to the repository. You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to the implemented task, use your file reading tool to read the linked markdown file to ensure the implementer followed established conventions. Evaluate if the implementation deviated from these architectural rules. If it did, check `{{REPO_PATH}}/.openvelo/implementer-notes.md`. Do not blindly fail an architecture deviation if the implementer provided a valid, documented technical justification for the deviation.
 
 ### Step 2 — Discover Changes
 Run `git diff origin/{{STAGING_BRANCH}}...HEAD` to identify all modified, added, and deleted files. You MUST examine the actual code changes to perform the review.
