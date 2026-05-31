@@ -171,6 +171,30 @@ describe('projects router - agent model fields', () => {
       assert.strictEqual(res.body.review_model, 'test-provider/model-rv');
       assert.strictEqual(res.body.documentation_model, 'test-provider/model-doc');
     });
+
+    it('AC6: creates and retrieves project with repo_host=bitbucket', async () => {
+      setUiSetting('security_enabled', 'false');
+      db.prepare(`INSERT INTO users (username, password_hash, role) VALUES ('admin', 'hash', 'admin')`).run({});
+
+      const adminUser = { id: 1, username: 'admin', role: 'admin' } as User;
+      const app = buildApp(adminUser);
+      const agent = supertest(app);
+
+      const res = await agent.post('/projects').send({
+        name: 'bitbucket-project',
+        port: 3001,
+        repo_host: 'bitbucket',
+        repo_url: 'https://bitbucket.org/workspace/repo.git',
+      });
+
+      assert.strictEqual(res.status, 201);
+      assert.strictEqual(res.body.repo_host, 'bitbucket');
+      assert.strictEqual(res.body.repo_url, 'https://bitbucket.org/workspace/repo.git');
+
+      const getRes = await agent.get('/projects/1');
+      assert.strictEqual(getRes.status, 200);
+      assert.strictEqual(getRes.body.repo_host, 'bitbucket');
+    });
   });
 
   describe('PUT /projects/:id', () => {

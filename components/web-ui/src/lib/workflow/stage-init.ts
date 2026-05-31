@@ -79,7 +79,7 @@ export async function handleInit(chatId: number): Promise<void> {
   // Use git clone
   const gitArgs = ['clone'];
   if (project.repo_pat) {
-    const urlWithCreds = addPatToUrl(repoUrl, project.repo_pat);
+    const urlWithCreds = addPatToUrl(repoUrl, project.repo_pat, project.repo_host);
     gitArgs.push(urlWithCreds, repoDir);
   } else {
     gitArgs.push(repoUrl, repoDir);
@@ -128,10 +128,14 @@ export async function handleInit(chatId: number): Promise<void> {
   });
 }
 
-function addPatToUrl(url: string, pat: string): string {
+function addPatToUrl(url: string, pat: string, repoHost: string): string {
   try {
     const parsed = new URL(url);
-    parsed.username = 'token';
+    if (repoHost === 'bitbucket') {
+      parsed.username = 'x-token-auth';
+    } else {
+      parsed.username = 'token';
+    }
     parsed.password = pat;
     return parsed.toString();
   } catch {

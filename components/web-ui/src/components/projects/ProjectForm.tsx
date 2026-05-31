@@ -286,11 +286,12 @@ export function ProjectForm({ initial, suggestedPort, onSubmit, onCancel, isSubm
                           <SelectItem value="azure-devops">Azure DevOps</SelectItem>
                           <SelectItem value="github">GitHub</SelectItem>
                           <SelectItem value="gitea">Gitea</SelectItem>
+                          <SelectItem value="bitbucket">Bitbucket</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
                     <Field label="Repo URL" id="repo_url" value={form.repo_url} onChange={set('repo_url')}
-                      placeholder="https://github.com/USER/REPO.git" required />
+                      placeholder="https://your-host.com/owner/repo.git" required />
                     <Field label="Repo Token" id="repo_pat" type="password" value={form.repo_pat} onChange={set('repo_pat')}
                       placeholder={initial ? '(unchanged)' : 'Personal Access Token'} />
                     <Field label="Repo Working Branch" id="staging_branch" value={form.staging_branch}

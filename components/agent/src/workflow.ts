@@ -6,6 +6,7 @@ import { runCommand, isWatchMode } from './shell.js';
 import { createAndMergePR as createAdoPR } from './ado.js';
 import { createAndMergePR as createGithubPR } from './github.js';
 import { createAndMergePR as createGiteaPR } from './gitea.js';
+import { createAndMergePR as createBitbucketPR } from './bitbucket.js';
 import { dotnetSetup, isDotnetRepo, runDotnetBuild } from './dotnet.js';
 import { openCodeServerManager } from './opencode-server.js';
 import { AgentSession } from './session.js';
@@ -687,6 +688,8 @@ export class WorkflowEngine {
                 prId = await createAdoPR(this.workBranchName);
             } else if (CONFIG.REPO_HOST === 'gitea') {
                 prId = await createGiteaPR(this.workBranchName);
+            } else if (CONFIG.REPO_HOST === 'bitbucket') {
+                prId = await createBitbucketPR(this.workBranchName);
             } else {
                 prId = await createGithubPR(this.workBranchName);
             }

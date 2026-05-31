@@ -91,12 +91,16 @@ export const CONFIG = {
     PROJECT_ID: null as number | null,
 };
 
-export function generateFinalRepoURL(repoUrl: string, repoPat: string): string {
-    if (!repoPat || !repoUrl) return repoUrl;
+export function generateFinalRepoURL(repoUrl: string, repoPat: string, repoHost: string): string {
+    if (!repoPat) return repoUrl;
     try {
         const url = new URL(repoUrl);
-        url.username = repoPat;
-        url.password = '';
+        if (repoHost === 'bitbucket') {
+            url.username = 'x-token-auth';
+        } else {
+            url.username = 'token';
+        }
+        url.password = repoPat;
         return url.toString();
     } catch {
         return repoUrl;
@@ -104,7 +108,7 @@ export function generateFinalRepoURL(repoUrl: string, repoPat: string): string {
 }
 
 export function applyProjectConfig(project: ProjectConfig): void {
-    CONFIG.REPO_URL = generateFinalRepoURL(project.repo_url, project.repo_pat ?? '');
+    CONFIG.REPO_URL = generateFinalRepoURL(project.repo_url, project.repo_pat ?? '', project.repo_host);
     CONFIG.REPO_HOST = project.repo_host || 'github';
     CONFIG.REPO_PAT = project.repo_pat ?? '';
     CONFIG.BACKEND = project.backend;

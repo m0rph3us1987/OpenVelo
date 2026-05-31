@@ -49,15 +49,19 @@ function sanitizeProject(p: Project) {
   };
 }
 
-function generateFinalRepoURL(url: string, pat: string): string {
-  if (!pat) return url;
+export function generateFinalRepoURL(repoUrl: string, repoPat: string, repoHost: string): string {
+  if (!repoPat) return repoUrl;
   try {
-    const u = new URL(url);
-    u.username = 'token';
-    u.password = pat;
+    const u = new URL(repoUrl);
+    if (repoHost === 'bitbucket') {
+      u.username = 'x-token-auth';
+    } else {
+      u.username = 'token';
+    }
+    u.password = repoPat;
     return u.toString();
   } catch {
-    return url;
+    return repoUrl;
   }
 }
 
@@ -74,7 +78,7 @@ function createDockerClient(): Docker {
 // ─── Projects CRUD ────────────────────────────────────────────────────────────
 
 projectsRouter.post('/validate', async (req, res) => {
-  const { id, name, port, repo_url, repo_pat, docker_image, step } = req.body;
+  const { id, name, port, repo_url, repo_pat, repo_host, docker_image, step } = req.body;
   
   try {
     initDb();
@@ -108,7 +112,7 @@ projectsRouter.post('/validate', async (req, res) => {
 
       case 'repo': {
         if (repo_url) {
-          const finalUrl = generateFinalRepoURL(repo_url, repo_pat || '');
+          const finalUrl = generateFinalRepoURL(repo_url, repo_pat || '', repo_host || 'github');
           try {
             execFileSync('git', ['ls-remote', finalUrl], { stdio: 'ignore', timeout: 10000 });
             return res.json({ success: true });

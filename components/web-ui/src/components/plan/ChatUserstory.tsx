@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { ChatSession } from '@/lib/types';
 import { useStageWebSocket } from '@/hooks/useStageWebSocket';
 import { TextLog } from '@/components/ui/text-log';
+import { Button } from '@/components/ui/button';
 
 interface ChatUserstoryProps {
   chat: ChatSession;
@@ -36,9 +37,13 @@ export function ChatUserstory({ chat, onHeaderInfo }: ChatUserstoryProps) {
   }
 
   if (subStage === 'error') {
+    const handleRetry = async () => {
+      await fetch(`/api/chats/${chat.id}/quick-story/retry`, { method: 'POST' });
+    };
     return (
-      <div data-testid="error-message" className="flex items-center justify-center h-full text-muted-foreground">
-        Error generating story
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+        <span>Error generating story</span>
+        <Button onClick={handleRetry} variant="outline">Retry</Button>
       </div>
     );
   }

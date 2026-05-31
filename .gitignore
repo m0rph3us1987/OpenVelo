@@ -118,6 +118,7 @@ desktop.ini
 .claude/
 .gemini/
 .copilot/
+.antigravitycli/
 
 # -----------------------------------------------------------------------------
 # Coverage & test output

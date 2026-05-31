@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "rm -rf dist && tsc",
+    "typecheck": "tsc --noEmit",
     "start": "tsx src/index.ts",
     "start:prod": "node dist/index.js",
     "test": "npx tsx --test tests/unit/*.test.ts"

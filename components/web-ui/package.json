@@ -8,7 +8,7 @@
     "start": "tsx server.ts",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/lib/auth.test.ts tests/lib/db-auth.test.ts tests/lib/db-groups.test.ts tests/lib/db-schema.test.ts tests/lib/db-users.test.ts tests/lib/global-fetch.test.ts tests/lib/verify-session.test.ts tests/lib/workflow/verify-error-classifier.test.ts tests/lib/workflow/verify-analysis-prompt.test.ts tests/api/routes/auth.test.ts tests/api/routes/settings.test.ts tests/api/routes/users.test.ts tests/api/routes/chatCreate.test.ts tests/api/routes/uploads-verify.test.ts tests/pages/PlanPage.test.tsx tests/components/plan/NewChatModal.test.tsx tests/components/plan/ChatVerify-outcomes.test.tsx",
+    "test": "tsx --test tests/lib/auth.test.ts tests/lib/db-auth.test.ts tests/lib/db-groups.test.ts tests/lib/db-schema.test.ts tests/lib/db-users.test.ts tests/lib/global-fetch.test.ts tests/lib/verify-session.test.ts tests/lib/workflow/verify-error-classifier.test.ts tests/lib/workflow/verify-analysis-prompt.test.ts tests/api/routes/auth.test.ts tests/api/routes/settings.test.ts tests/api/routes/users.test.ts tests/api/routes/chatCreate.test.ts tests/api/routes/uploads-verify.test.ts tests/api/routes/generateFinalRepoURL.test.ts tests/pages/PlanPage.test.tsx tests/components/plan/NewChatModal.test.tsx tests/components/plan/ChatVerify-outcomes.test.tsx",
     "postinstall": "node -e \"if(process.env.npm_config_ignore_scripts!=='true' && !process.env.DOCKER_BUILD) require('child_process').execSync('npm rebuild better-sqlite3 node-pty', {stdio:'inherit'})\" || true"
   },
   "dependencies": {

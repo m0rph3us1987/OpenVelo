@@ -190,6 +190,20 @@ chatsRouter.post('/:chatId/verify/retry', requireProjectAccess, (req, res) => {
   res.json({ success: true });
 });
 
+chatsRouter.post('/:chatId/quick-story/retry', requireProjectAccess, (req, res) => {
+  const { chatId } = req.params;
+  const chat = getChatSession(Number(chatId));
+  if (!chat) {
+    res.status(404).json({ error: 'Chat not found' });
+    return;
+  }
+
+  updateChatSession(Number(chatId), { running: false });
+  transitionTo(Number(chatId), chat.stage, chat.sub_stage_pre_error);
+
+  res.json({ success: true });
+});
+
 chatsRouter.post('/:chatId/final_assessment/retry', requireProjectAccess, (req, res) => {
   const { chatId } = req.params;
   const chat = getChatSession(Number(chatId));

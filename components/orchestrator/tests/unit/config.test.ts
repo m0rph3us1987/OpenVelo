@@ -135,7 +135,7 @@ describe('applyProjectConfig', () => {
 
         applyProjectConfig(project);
 
-        assert.strictEqual(CONFIG.REPO_URL, 'https://test-pat@github.com/test/repo');
+        assert.strictEqual(CONFIG.REPO_URL, 'https://token:test-pat@github.com/test/repo');
         assert.strictEqual(CONFIG.REPO_HOST, 'github');
         assert.strictEqual(CONFIG.REPO_PAT, 'test-pat');
         assert.strictEqual(CONFIG.BACKEND, 'opencode');
@@ -196,5 +196,36 @@ describe('applyProjectConfig', () => {
         assert.strictEqual(handshakeConfig.blueprint_model, 'model-blue');
         assert.strictEqual(handshakeConfig.review_model, 'model-rev');
         assert.strictEqual(handshakeConfig.documentation_model, 'model-doc');
+    });
+
+    it('uses x-token-auth username for bitbucket host', () => {
+        const project: ProjectConfig = {
+            id: 6,
+            port: 3001,
+            repo_url: 'https://bitbucket.org/workspace/repo_slug',
+            repo_host: 'bitbucket',
+            repo_pat: 'bitbucket-pat',
+            docker_image: 'openvelo-agent:linux',
+            backend: 'opencode',
+            execution_model: 'gpt-execution',
+            blueprint_model: null,
+            review_model: null,
+            documentation_model: null,
+            build_cmd: null,
+            test_cmd: null,
+            staging_branch: 'staging',
+            poll_interval: 60000,
+            agent_max_timeout: 1800000,
+            max_parallel_jobs: 1,
+            max_retries: 3,
+            agent_max_retries: 3,
+            remove_deleted_containers: true,
+        };
+
+        applyProjectConfig(project);
+
+        assert.strictEqual(CONFIG.REPO_URL, 'https://x-token-auth:bitbucket-pat@bitbucket.org/workspace/repo_slug');
+        assert.strictEqual(CONFIG.REPO_HOST, 'bitbucket');
+        assert.strictEqual(CONFIG.REPO_PAT, 'bitbucket-pat');
     });
 });
