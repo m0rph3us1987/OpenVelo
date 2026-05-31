@@ -317,9 +317,13 @@ function handleOrchestratorConnection(ws: WebSocket, query: Record<string, strin
             const project = getProject(projectId);
             if (project) {
               const models = getProjectModels(projectId);
-              const resolvedExecutionModel = models.execution_model;
-              console.log(`[ORCH] Sending configure for project ${projectId}: resolved execution_model=${resolvedExecutionModel}`);
-              const config = { ...project, execution_model: resolvedExecutionModel };
+              const config = {
+                ...project,
+                execution_model: models.execution_model,
+                blueprint_model: models.blueprint_model,
+                review_model: models.review_model,
+                documentation_model: models.documentation_model,
+              };
               ws.send(JSON.stringify({ type: 'configure', config }));
             } else {
                 console.error(`[ORCH] Project ${projectId} not found in DB — cannot send configure`);

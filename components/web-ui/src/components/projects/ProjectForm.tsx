@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils';
 import type { ProjectFormData, Project } from '@/lib/types';
 import type { Model } from '@/lib/db';
 
-const DEFAULTS: ProjectFormData = {
+export const DEFAULTS: ProjectFormData = {
   name: '',
   password: '',
   port: 3001,
@@ -33,6 +33,9 @@ const DEFAULTS: ProjectFormData = {
   chat_model: '',
   requirement_model: '',
   planning_model: '',
+  blueprint_model: '',
+  review_model: '',
+  documentation_model: '',
   build_cmd: '',
   test_cmd: '',
   staging_branch: 'staging',
@@ -47,7 +50,7 @@ const DEFAULTS: ProjectFormData = {
 const TABS = ['general', 'models', 'repo', 'execution'] as const;
 type TabType = typeof TABS[number];
 
-function toFormData(project: Project): ProjectFormData {
+export function toFormData(project: Project): ProjectFormData {
   return {
     name: project.name,
     password: '',
@@ -63,6 +66,9 @@ function toFormData(project: Project): ProjectFormData {
     chat_model: project.chat_model ?? '',
     requirement_model: project.requirement_model ?? '',
     planning_model: project.planning_model ?? '',
+    blueprint_model: project.blueprint_model ?? '',
+    review_model: project.review_model ?? '',
+    documentation_model: project.documentation_model ?? '',
     build_cmd: project.build_cmd ?? '',
     test_cmd: project.test_cmd ?? '',
     staging_branch: project.staging_branch,
@@ -324,7 +330,7 @@ export function ProjectForm({ initial, suggestedPort, onSubmit, onCancel, isSubm
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <Field label="Poll Interval (ms)" id="poll_interval" type="number" value={form.poll_interval}
                         onChange={setNum('poll_interval')} />
-                      
+
                       <div className="space-y-2">
                         <Label htmlFor="remove_deleted_containers">Remove deleted containers</Label>
                         <div className="flex items-center space-x-2 pt-1">
@@ -359,14 +365,40 @@ export function ProjectForm({ initial, suggestedPort, onSubmit, onCancel, isSubm
                       models={models}
                       required
                     />
+                    <h3 className="text-sm font-semibold">Agent Models</h3>
                     <ModelSelect
-                      label="Execution Model"
+                      label="Blueprint Model"
+                      id="blueprint_model"
+                      value={form.blueprint_model}
+                      onChange={set('blueprint_model')}
+                      models={models}
+                      includeDefaultOption
+                    />
+                    <ModelSelect
+                      label="Coding Model"
                       id="execution_model"
                       value={form.execution_model}
                       onChange={set('execution_model')}
                       models={models}
                       includeDefaultOption
                     />
+                    <ModelSelect
+                      label="Review Model"
+                      id="review_model"
+                      value={form.review_model}
+                      onChange={set('review_model')}
+                      models={models}
+                      includeDefaultOption
+                    />
+                    <ModelSelect
+                      label="Documentation Model"
+                      id="documentation_model"
+                      value={form.documentation_model}
+                      onChange={set('documentation_model')}
+                      models={models}
+                      includeDefaultOption
+                    />
+                    <h3 className="text-sm font-semibold">Web-UI Models</h3>
                     <ModelSelect
                       label="Analyzer Model"
                       id="analyzer_model"

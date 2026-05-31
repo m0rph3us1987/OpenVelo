@@ -293,7 +293,7 @@ export class WorkflowEngine {
             planPrompt += `\n\n### CRITICAL REVISION NEEDED\n\n${failureContext}\n\nPlease revise the plan to address these failures.`;
         }
 
-        await this.sessionPlan.send(planPrompt, CONFIG.BACKEND_MODEL);
+        await this.sessionPlan.send(planPrompt, CONFIG.BACKEND_BLUEPRINT_MODEL);
 
         const planPath = '/tmp/IMPLEMENTATION_PLAN.md';
         if (fs.existsSync(planPath)) {
@@ -579,7 +579,7 @@ export class WorkflowEngine {
             STAGING_BRANCH: CONFIG.STAGING_BRANCH,
         });
 
-        await sessionReview.send(reviewPrompt, CONFIG.BACKEND_MODEL);
+        await sessionReview.send(reviewPrompt, CONFIG.BACKEND_REVIEW_MODEL);
 
         if (!fs.existsSync(this.reviewPath)) {
             console.log('REVIEW.json not written by reviewer — treating as pass.');
@@ -622,7 +622,7 @@ export class WorkflowEngine {
             CHECKPOINT_BRANCH: this.checkpointBranch
         });
 
-        await this.sessionDocument.send(docPrompt, CONFIG.BACKEND_MODEL);
+        await this.sessionDocument.send(docPrompt, CONFIG.BACKEND_DOCUMENTATION_MODEL);
 
         console.log('Documentation phase complete. Staging documentation changes...');
         await runCommand('git', ['add', '.openvelo/architecture'], CONFIG.REPO_PATH);

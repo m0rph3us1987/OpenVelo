@@ -43,8 +43,8 @@ describe('groups routes', () => {
       const bcrypt = await import('bcryptjs');
       const u1 = createUser({ username: 'user1', password_hash: await bcrypt.hash('Pass123!', 10), role: 'user', enabled: true, password_reset_required: false });
       const u2 = createUser({ username: 'user2', password_hash: await bcrypt.hash('Pass123!', 10), role: 'user', enabled: true, password_reset_required: false });
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
-      const p2 = createProject({ name: 'proj2', port: 7002, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p2 = createProject({ name: 'proj2', port: 7002, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
 
       const res = await agent.post('/api/groups').set('Cookie', cookie).send({
         name: 'Test Group',
@@ -85,7 +85,7 @@ describe('groups routes', () => {
       const cookie = await getAdminCookie(agent);
       const bcrypt = await import('bcryptjs');
       const u1 = createUser({ username: 'user1', password_hash: await bcrypt.hash('Pass123!', 10), role: 'user', enabled: true, password_reset_required: false });
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
       const g1 = createGroup({ name: 'Group A' });
 
       const db = (await import('@/lib/db')).getDb();
@@ -147,8 +147,8 @@ describe('groups routes', () => {
       const cookie = await getAdminCookie(agent);
       const bcrypt = await import('bcryptjs');
       createUser({ username: 'user1', password_hash: await bcrypt.hash('Pass123!', 10), role: 'user', enabled: true, password_reset_required: false });
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
-      const p2 = createProject({ name: 'proj2', port: 7002, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p2 = createProject({ name: 'proj2', port: 7002, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
       const g1 = createGroup({ name: 'Original' });
 
       const res = await agent.put(`/api/groups/${g1.id}`).set('Cookie', cookie).send({ projectIds: [p1.id, p2.id] });
@@ -171,7 +171,7 @@ describe('groups routes', () => {
       const cookie = await getAdminCookie(agent);
       const bcrypt = await import('bcryptjs');
       const u1 = createUser({ username: 'user1', password_hash: await bcrypt.hash('Pass123!', 10), role: 'user', enabled: true, password_reset_required: false });
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
       const g1 = createGroup({ name: 'ToDelete' });
       const db = (await import('@/lib/db')).getDb();
       db.prepare('INSERT INTO group_members (group_id, user_id) VALUES (?, ?)').run(g1.id, u1.id);
@@ -241,7 +241,7 @@ describe('groups routes', () => {
     it('assigns a single project to group', async () => {
       const agent = supertest(app);
       const cookie = await getAdminCookie(agent);
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
       const g1 = createGroup({ name: 'Project Assign Test' });
 
       const res = await agent.post(`/api/groups/${g1.id}/projects/${p1.id}`).set('Cookie', cookie);
@@ -256,7 +256,7 @@ describe('groups routes', () => {
     it('removes a single project from group', async () => {
       const agent = supertest(app);
       const cookie = await getAdminCookie(agent);
-      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
+      const p1 = createProject({ name: 'proj1', port: 7001, password_hash: null, repo_host: 'github', repo_url: '', repo_pat: null, docker_image: 'openvelo-agent:linux', backend: 'opencode', default_model: '', execution_model: '', blueprint_model: '', analyzer_model: '', chat_model: '', requirement_model: '', planning_model: '', review_model: '', documentation_model: '', build_cmd: null, test_cmd: null, staging_branch: 'staging', poll_interval: 60000, agent_max_timeout: 1800000, max_parallel_jobs: 1, max_retries: 3, agent_max_retries: 3, status: 'stopped', pid: null });
       const g1 = createGroup({ name: 'Project Remove Test' });
       const db = (await import('@/lib/db')).getDb();
       db.prepare('INSERT INTO group_projects (group_id, project_id) VALUES (?, ?)').run(g1.id, p1.id);

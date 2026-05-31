@@ -10,10 +10,13 @@ export interface Project {
   backend: string;
   default_model: string;
   execution_model: string;
+  blueprint_model: string;
   analyzer_model: string;
   chat_model: string;
   requirement_model: string;
   planning_model: string;
+  review_model: string;
+  documentation_model: string;
   build_cmd: string | null;
   test_cmd: string | null;
   staging_branch: string;
@@ -76,10 +79,13 @@ export type WsMessage = WsLogMessage | WsJobUpdateMessage | WsConnectedMessage;
 export interface ProjectModels {
   default_model: string;
   execution_model: string;
+  blueprint_model: string;
   analyzer_model: string;
   chat_model: string;
   requirement_model: string;
   planning_model: string;
+  review_model: string;
+  documentation_model: string;
 }
 
 export interface ProjectFormData {
@@ -97,6 +103,9 @@ export interface ProjectFormData {
   chat_model: string;
   requirement_model: string;
   planning_model: string;
+  blueprint_model: string;
+  review_model: string;
+  documentation_model: string;
   build_cmd: string;
   test_cmd: string;
   staging_branch: string;

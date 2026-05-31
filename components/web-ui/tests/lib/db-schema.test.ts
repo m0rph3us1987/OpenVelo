@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import assert from 'node:assert';
 import { describe, it, after, beforeEach } from 'node:test';
-import { initDb, resetTestDb, closeDb } from '@/lib/db';
+import { initDb, resetTestDb, closeDb, createProject } from '@/lib/db';
 
 describe('db.ts schema migrations', () => {
   let db: Database.Database;
@@ -14,6 +14,79 @@ describe('db.ts schema migrations', () => {
 
   after(() => {
     closeDb();
+  });
+
+  it('adds blueprint_model column with correct type and default', () => {
+    const info = db.prepare("PRAGMA table_info(projects)").all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const col = info.find(c => c.name === 'blueprint_model');
+    assert.ok(col, 'blueprint_model column should exist');
+    assert.strictEqual(col.notnull, 1, 'blueprint_model should be NOT NULL');
+    assert.strictEqual(col.dflt_value, "''", 'blueprint_model should default to empty string');
+  });
+
+  it('adds review_model column with correct type and default', () => {
+    const info = db.prepare("PRAGMA table_info(projects)").all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const col = info.find(c => c.name === 'review_model');
+    assert.ok(col, 'review_model column should exist');
+    assert.strictEqual(col.notnull, 1, 'review_model should be NOT NULL');
+    assert.strictEqual(col.dflt_value, "''", 'review_model should default to empty string');
+  });
+
+  it('adds documentation_model column with correct type and default', () => {
+    const info = db.prepare("PRAGMA table_info(projects)").all() as { name: string; notnull: number; dflt_value: string | null }[];
+    const col = info.find(c => c.name === 'documentation_model');
+    assert.ok(col, 'documentation_model column should exist');
+    assert.strictEqual(col.notnull, 1, 'documentation_model should be NOT NULL');
+    assert.strictEqual(col.dflt_value, "''", 'documentation_model should default to empty string');
+  });
+
+  it('initDb() is idempotent (running twice does not error)', () => {
+    assert.doesNotThrow(() => {
+      initDb();
+    }, 'initDb() should not throw when called twice');
+  });
+
+  it('createProject() persists values for the three new fields', () => {
+    const project = createProject({
+      name: 'test-schema-project',
+      password_hash: null,
+      port: 30099,
+      repo_host: 'github',
+      repo_url: '',
+      repo_pat: null,
+      docker_image: 'openvelo-agent:linux',
+      backend: 'opencode',
+      default_model: 'google/gemini-2.5-pro',
+      execution_model: 'openai/gpt-4o',
+      blueprint_model: 'anthropic/claude-3-opus',
+      analyzer_model: 'anthropic/claude-3',
+      chat_model: 'openai/gpt-4o-mini',
+      requirement_model: 'google/gemini-2.0',
+      planning_model: 'openai/gpt-4o',
+      review_model: 'anthropic/claude-3-sonnet',
+      documentation_model: 'google/gemini-2.0-flash',
+      build_cmd: null,
+      test_cmd: null,
+      staging_branch: 'staging',
+      poll_interval: 60000,
+      agent_max_timeout: 1800000,
+      max_parallel_jobs: 1,
+      max_retries: 3,
+      agent_max_retries: 3,
+      remove_deleted_containers: 1,
+      status: 'stopped',
+      pid: null,
+    });
+
+    const row = db.prepare('SELECT blueprint_model, review_model, documentation_model FROM projects WHERE id = ?').get(project.id) as {
+      blueprint_model: string;
+      review_model: string;
+      documentation_model: string;
+    };
+
+    assert.strictEqual(row.blueprint_model, 'anthropic/claude-3-opus');
+    assert.strictEqual(row.review_model, 'anthropic/claude-3-sonnet');
+    assert.strictEqual(row.documentation_model, 'google/gemini-2.0-flash');
   });
 
   it('creates users table with correct schema', () => {

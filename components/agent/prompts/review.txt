@@ -68,6 +68,7 @@ Write the JSON verdict to `{{REVIEW_PATH}}`.
 7. **Git Conventions**: Git cannot track empty directories. A `.gitkeep` or `.keep` file inside an otherwise empty directory is standard practice and is NOT a deviation from the story.
 8. **Test Presence**: If the story requires tests, verify there is a good-faith effort to test the new logic. Zero tests when required = fail. Fewer tests than mentioned = usually pass.
 9. **Accept Documented Deviations**: If the implementer wrote a `## Deviation:` note in `/repo/.openvelo/implementer-notes.md` explaining why a criterion cannot be met as written, and the reason is technically valid (not laziness), treat that criterion as satisfied. Only reject deviations that are clearly lazy, would break core functionality, or have no technical justification.
+10. **Pragmatic Security Mocking in Tests**: Accept tests that mock, bypass, or simplify security layers (e.g., bypassing CSRF, mocking session handlers, stubbing out authentication/authorization middleware). Unless the user story is specifically about building or verifying security enforcement itself, do NOT fail the review because the implementer bypassed or mocked security configurations in its unit or integration tests. Functional tests should focus strictly on the core business logic of the feature being built.
 
 ---
 

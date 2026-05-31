@@ -22,6 +22,9 @@ export const CONFIG = {
     JOB_TITLE: '',
     BACKEND: '',
     BACKEND_MODEL: '',
+    BACKEND_BLUEPRINT_MODEL: '',
+    BACKEND_REVIEW_MODEL: '',
+    BACKEND_DOCUMENTATION_MODEL: '',
     BUILD_CMD: '',
     TEST_CMD: '',
     STAGING_BRANCH: 'staging',
@@ -36,6 +39,9 @@ export interface HandshakeConfig {
     repo_pat?: string;
     backend: string;
     execution_model?: string;
+    blueprint_model?: string;
+    review_model?: string;
+    documentation_model?: string;
     build_cmd: string;
     test_cmd: string;
     staging_branch: string;
@@ -49,6 +55,9 @@ export function applyHandshake(data: HandshakeConfig): void {
     CONFIG.REPO_PAT = data.repo_pat ?? '';
     CONFIG.BACKEND = data.backend;
     CONFIG.BACKEND_MODEL = data.execution_model ?? '';
+    CONFIG.BACKEND_BLUEPRINT_MODEL = data.blueprint_model ?? '';
+    CONFIG.BACKEND_REVIEW_MODEL = data.review_model ?? '';
+    CONFIG.BACKEND_DOCUMENTATION_MODEL = data.documentation_model ?? '';
     CONFIG.BUILD_CMD = data.build_cmd;
     CONFIG.TEST_CMD = data.test_cmd;
     CONFIG.STAGING_BRANCH = data.staging_branch;

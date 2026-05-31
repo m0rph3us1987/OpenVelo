@@ -40,6 +40,7 @@ Apply changes in this order:
 3. **Presentation last** — UI components, frontend integration, user-facing views
 
 **When writing or modifying tests:**
+- **Functional Testing Focus & Minimal Security Mocking**: Tests written for new features should focus primarily on the **functional point of view** (the core business logic). You should assume a **minimal security setup** or mock/bypass security checks (e.g. CSRF tokens, session verification, OAuth middleware, role/permission guards) in your test cases so that your tests focus purely on the functionality of the feature being built. Do NOT struggle with configuring full security infrastructure in tests unless you are specifically implementing or testing a security feature. Only tests written specifically *for* security features should make sure that the security enforcement is 100% in place. Other tests should focus strictly on the functions they are building.
 - Every test must be self-contained: set up its own state in `beforeEach`/`SetUp` and tear down in `afterEach`/`TearDown`. Never rely on test execution order.
 - If the codebase uses a singleton (e.g., a shared DB connection, a global config object, a static instance), your test MUST reset it before AND after each test case. Resetting only in `beforeEach` is not enough — `afterEach` must also restore original state so other test files are not affected.
 - Never mutate globals (`globalThis`, `process.env`, static fields) without restoring the original value in `afterEach`/`TearDown`/`finally`.
@@ -120,7 +121,7 @@ When tests fail with authentication, authorization, security, or missing depende
 If yes, the implementation is correct. Do NOT remove auth checks or security logic to make tests pass.
 
 **Step 2 — Set up test preconditions.** The problem is in the tests, not the implementation. Apply the minimal fix:
-- **Auth/security errors**: Add mock auth tokens/headers to test requests. Set up a test authentication handler or middleware bypass. Use framework-specific test auth utilities (e.g., `.WithAuthentication()`, `[Authorize]` test attributes, `client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "test-token")`, `request.Headers.Add("Authorization", "Bearer test-token")`).
+- **Auth/security errors**: Mock the auth/security middleware entirely, skip token verification, use simple fake auth headers, or disable the security check for the test environment. Bypassing or mocking complex security middleware is the *recommended path* to keep tests focused purely on functional logic and avoid running in circles. Only assert full security enforcement if testing a security feature specifically.
 - **Missing env vars / config**: Set them in the test fixture or use a `.env.test` file. Do NOT change application code defaults to accommodate tests.
 - **External service dependencies**: Mock or stub the service in tests. Use an in-memory replacement (e.g., in-memory database, fake HTTP handler). Do NOT make tests depend on real external services.
 - **Missing seed data / fixtures**: Create the necessary test data in `beforeEach`/`SetUp`.

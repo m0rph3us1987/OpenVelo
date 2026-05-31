@@ -298,6 +298,9 @@ export function initDb(): void {
     `ALTER TABLE domains DROP COLUMN key_topics_json`,
     `ALTER TABLE chat_sessions ADD COLUMN error_type TEXT`,
     `ALTER TABLE projects ADD COLUMN remove_deleted_containers INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE projects ADD COLUMN blueprint_model TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE projects ADD COLUMN review_model TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE projects ADD COLUMN documentation_model TEXT NOT NULL DEFAULT ''`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* ignore */ }
@@ -327,12 +330,12 @@ export function createProject(data: Omit<Project, 'id' | 'created_at' | 'updated
   const result = db.prepare(`
     INSERT INTO projects (name, password_hash, port,
       repo_host, repo_url, repo_pat, docker_image, backend,
-      default_model, execution_model, analyzer_model, chat_model, requirement_model, planning_model,
+      default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model,
       build_cmd, test_cmd, staging_branch, poll_interval, agent_max_timeout, max_parallel_jobs, max_retries, agent_max_retries, remove_deleted_containers,
       status, pid)
     VALUES (@name, @password_hash, @port,
       @repo_host, @repo_url, @repo_pat, @docker_image, @backend,
-      @default_model, @execution_model, @analyzer_model, @chat_model, @requirement_model, @planning_model,
+      @default_model, @execution_model, @blueprint_model, @analyzer_model, @chat_model, @requirement_model, @planning_model, @review_model, @documentation_model,
       @build_cmd, @test_cmd, @staging_branch, @poll_interval, @agent_max_timeout, @max_parallel_jobs, @max_retries, @agent_max_retries, @remove_deleted_containers,
       @status, @pid)
   `).run(data);
@@ -738,10 +741,13 @@ export function refreshModels(output: string): Model[] {
 export interface ProjectModels {
   default_model: string;
   execution_model: string;
+  blueprint_model: string;
   analyzer_model: string;
   chat_model: string;
   requirement_model: string;
   planning_model: string;
+  review_model: string;
+  documentation_model: string;
 }
 
 export function getProjectModels(projectId: number): ProjectModels {
@@ -755,10 +761,13 @@ export function getProjectModels(projectId: number): ProjectModels {
   return {
     default_model: defaultModel,
     execution_model: project.execution_model || defaultModel,
+    blueprint_model: project.blueprint_model || defaultModel,
     analyzer_model: project.analyzer_model || defaultModel,
     chat_model: project.chat_model || defaultModel,
     requirement_model: project.requirement_model || defaultModel,
     planning_model: project.planning_model || defaultModel,
+    review_model: project.review_model || defaultModel,
+    documentation_model: project.documentation_model || defaultModel,
   };
 }
 

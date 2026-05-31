@@ -34,10 +34,13 @@ function createTestDb(): Database.Database {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       default_model TEXT NOT NULL DEFAULT '',
       execution_model TEXT NOT NULL DEFAULT '',
+      blueprint_model TEXT NOT NULL DEFAULT '',
       analyzer_model TEXT NOT NULL DEFAULT '',
       chat_model TEXT NOT NULL DEFAULT '',
       requirement_model TEXT NOT NULL DEFAULT '',
-      planning_model TEXT NOT NULL DEFAULT ''
+      planning_model TEXT NOT NULL DEFAULT '',
+      review_model TEXT NOT NULL DEFAULT '',
+      documentation_model TEXT NOT NULL DEFAULT ''
     )
   `);
 
@@ -62,26 +65,124 @@ describe('getProjectModels', () => {
     try { fs.rmSync(tmpDir, { recursive: true }); } catch { /* ignore */ }
   });
 
-  it('returns all six model fields', () => {
+  it('returns all nine model fields', () => {
     db.prepare(`
-      INSERT INTO projects (name, port, default_model, execution_model, analyzer_model, chat_model, requirement_model, planning_model)
-      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3', 'openai/gpt-4o-mini', 'google/gemini-2.0', 'openai/gpt-4o')
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', 'anthropic/claude-3', 'openai/gpt-4o-mini', 'google/gemini-2.0', 'openai/gpt-4o', 'anthropic/claude-3-sonnet', 'google/gemini-2.0-flash')
     `).run();
 
     const result = getProjectModels(1);
 
     assert.strictEqual(result.default_model, 'google/gemini-2.5-pro');
     assert.strictEqual(result.execution_model, 'openai/gpt-4o');
+    assert.strictEqual(result.blueprint_model, 'anthropic/claude-3-opus');
     assert.strictEqual(result.analyzer_model, 'anthropic/claude-3');
     assert.strictEqual(result.chat_model, 'openai/gpt-4o-mini');
     assert.strictEqual(result.requirement_model, 'google/gemini-2.0');
     assert.strictEqual(result.planning_model, 'openai/gpt-4o');
+    assert.strictEqual(result.review_model, 'anthropic/claude-3-sonnet');
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.0-flash');
   });
 
-  it('execution_model falls back to default_model when empty string', () => {
+  it('blueprint_model falls back to default_model when empty string', () => {
     db.prepare(`
-      INSERT INTO projects (name, port, default_model, execution_model, analyzer_model, chat_model, requirement_model, planning_model)
-      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', '', '', '', '', '')
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '', '', '', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.blueprint_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.execution_model, 'openai/gpt-4o');
+  });
+
+  it('review_model falls back to default_model when empty string', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', '', '', '', '', '', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.review_model, 'google/gemini-2.5-pro');
+  });
+
+  it('documentation_model falls back to default_model when empty string', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', '', '', '', '', '', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.5-pro');
+  });
+
+  it('blueprint_model returns concrete value when set', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', '', '', '', '', '', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.blueprint_model, 'anthropic/claude-3-opus');
+    assert.strictEqual(result.default_model, 'google/gemini-2.5-pro');
+  });
+
+  it('review_model returns concrete value when set', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', '', '', '', '', 'anthropic/claude-3-sonnet', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.review_model, 'anthropic/claude-3-sonnet');
+    assert.strictEqual(result.default_model, 'google/gemini-2.5-pro');
+  });
+
+  it('documentation_model returns concrete value when set', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', 'anthropic/claude-3-opus', '', '', '', '', '', 'google/gemini-2.0-flash')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.0-flash');
+    assert.strictEqual(result.default_model, 'google/gemini-2.5-pro');
+  });
+
+  it('fallback behavior is independent per field', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '', '', 'anthropic/claude-3-sonnet', '')
+    `).run();
+
+    const result = getProjectModels(1);
+
+    assert.strictEqual(result.blueprint_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.review_model, 'anthropic/claude-3-sonnet');
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.execution_model, 'openai/gpt-4o');
+  });
+
+  it('throws when default_model is empty/falsy', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, '', '', '', '', '', '', '', '', '')
+    `).run();
+
+    assert.throws(() => {
+      getProjectModels(1);
+    }, /default_model/);
+  });
+
+  it('throws when project not found', () => {
+    db.prepare(`
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', '', '', '', '', '', '', '', '')
     `).run();
 
     const result = getProjectModels(1);
@@ -91,12 +192,15 @@ describe('getProjectModels', () => {
     assert.strictEqual(result.chat_model, 'google/gemini-2.5-pro');
     assert.strictEqual(result.requirement_model, 'google/gemini-2.5-pro');
     assert.strictEqual(result.planning_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.blueprint_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.review_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.5-pro');
   });
 
   it('execution_model returns the concrete value when set', () => {
     db.prepare(`
-      INSERT INTO projects (name, port, default_model, execution_model, analyzer_model, chat_model, requirement_model, planning_model)
-      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '')
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '', '', '', '')
     `).run();
 
     const result = getProjectModels(1);
@@ -107,8 +211,8 @@ describe('getProjectModels', () => {
 
   it('non-execution_model fields fall back to default_model when empty string', () => {
     db.prepare(`
-      INSERT INTO projects (name, port, default_model, execution_model, analyzer_model, chat_model, requirement_model, planning_model)
-      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '')
+      INSERT INTO projects (name, port, default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model)
+      VALUES ('test-project', 3001, 'google/gemini-2.5-pro', 'openai/gpt-4o', '', '', '', '', '', '', '')
     `).run();
 
     const result = getProjectModels(1);
@@ -117,6 +221,9 @@ describe('getProjectModels', () => {
     assert.strictEqual(result.chat_model, 'google/gemini-2.5-pro');
     assert.strictEqual(result.requirement_model, 'google/gemini-2.5-pro');
     assert.strictEqual(result.planning_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.blueprint_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.review_model, 'google/gemini-2.5-pro');
+    assert.strictEqual(result.documentation_model, 'google/gemini-2.5-pro');
   });
 
   it('throws when project not found', () => {

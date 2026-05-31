@@ -200,6 +200,9 @@ projectsRouter.post('/', async (req, res) => {
       chat_model: body.chat_model || '',
       requirement_model: body.requirement_model || '',
       planning_model: body.planning_model || '',
+      blueprint_model: body.blueprint_model || '',
+      review_model: body.review_model || '',
+      documentation_model: body.documentation_model || '',
       build_cmd: body.build_cmd || null,
       test_cmd: body.test_cmd || null,
       staging_branch: body.staging_branch || 'staging',
@@ -267,6 +270,9 @@ projectsRouter.put('/:id', requireProjectAccess, async (req, res) => {
       chat_model,
       requirement_model,
       planning_model,
+      blueprint_model,
+      review_model,
+      documentation_model,
       build_cmd,
       test_cmd,
       staging_branch,
@@ -292,6 +298,9 @@ projectsRouter.put('/:id', requireProjectAccess, async (req, res) => {
     if (chat_model !== undefined) updates.chat_model = chat_model;
     if (requirement_model !== undefined) updates.requirement_model = requirement_model;
     if (planning_model !== undefined) updates.planning_model = planning_model;
+    if (blueprint_model !== undefined) updates.blueprint_model = blueprint_model;
+    if (review_model !== undefined) updates.review_model = review_model;
+    if (documentation_model !== undefined) updates.documentation_model = documentation_model;
     if (build_cmd !== undefined) updates.build_cmd = build_cmd;
     if (test_cmd !== undefined) updates.test_cmd = test_cmd;
     if (staging_branch !== undefined) updates.staging_branch = staging_branch;
@@ -360,6 +369,21 @@ projectsRouter.post('/:id/start', requireProjectAccess, async (req, res) => {
     if (!modelExists) {
       res.status(400).json({ error: `Default model "${models.default_model}" is not in the models table. Please refresh models or select a valid default model in the Models tab of project settings.` });
       return;
+    }
+
+    const allResolvedModels = [
+      { field: 'blueprint_model', value: models.blueprint_model },
+      { field: 'execution_model', value: models.execution_model },
+      { field: 'review_model', value: models.review_model },
+      { field: 'documentation_model', value: models.documentation_model },
+    ];
+    for (const { field, value } of allResolvedModels) {
+      if (value === models.default_model) continue;
+      const exists = allModels.some(m => `${m.provider}/${m.model_name}` === value);
+      if (!exists) {
+        res.status(400).json({ error: `Model "${value}" (${field}) is not in the models table. Please refresh models or select a valid model in the Models tab of project settings.` });
+        return;
+      }
     }
 
     if (project.status === 'paused') {

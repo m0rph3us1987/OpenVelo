@@ -33,7 +33,7 @@ interface ValidationStep {
 const VALIDATION_STEPS: ValidationStep[] = [
   { id: 'name', label: 'Project Name Availability', tab: 'general', fieldId: 'name', relevantFields: ['name'] },
   { id: 'port', label: 'Port Availability', tab: 'general', fieldId: 'port', relevantFields: ['port'] },
-  { id: 'models', label: 'Model Configuration', tab: 'models', fieldId: 'default_model', relevantFields: ['default_model', 'execution_model', 'analyzer_model', 'chat_model', 'requirement_model', 'planning_model'] },
+  { id: 'models', label: 'Model Configuration', tab: 'models', fieldId: 'default_model', relevantFields: ['default_model', 'execution_model', 'analyzer_model', 'chat_model', 'requirement_model', 'planning_model', 'blueprint_model', 'review_model', 'documentation_model'] },
   { id: 'repo', label: 'Repository Connection', tab: 'repo', fieldId: 'repo_url', relevantFields: ['repo_url', 'repo_pat'] },
   { id: 'docker', label: 'Docker Image', tab: 'execution', fieldId: 'docker_image', relevantFields: ['docker_image'] },
 ];
@@ -89,6 +89,9 @@ export function EditProjectDialog({ project, projectId, open, onOpenChange, onUp
       chat_model: project.chat_model ?? '',
       requirement_model: project.requirement_model ?? '',
       planning_model: project.planning_model ?? '',
+      blueprint_model: project.blueprint_model ?? '',
+      review_model: project.review_model ?? '',
+      documentation_model: project.documentation_model ?? '',
       build_cmd: project.build_cmd ?? '',
       test_cmd: project.test_cmd ?? '',
       staging_branch: project.staging_branch,

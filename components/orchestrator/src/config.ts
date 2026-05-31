@@ -39,6 +39,9 @@ export interface ProjectConfig {
     docker_image: string;
     backend: string;
     execution_model: string | null;
+    blueprint_model: string | null;
+    review_model: string | null;
+    documentation_model: string | null;
     build_cmd: string | null;
     test_cmd: string | null;
     staging_branch: string;
@@ -66,6 +69,9 @@ export const CONFIG = {
     // Backend
     BACKEND: process.env.BACKEND || 'opencode',
     BACKEND_MODEL: process.env.BACKEND_MODEL || '',
+    BACKEND_BLUEPRINT_MODEL: '',
+    BACKEND_REVIEW_MODEL: '',
+    BACKEND_DOCUMENTATION_MODEL: '',
 
     // Docker / agents
     DOCKER_IMAGE: process.env.DOCKER_IMAGE || 'openvelo-agent:linux',
@@ -103,6 +109,9 @@ export function applyProjectConfig(project: ProjectConfig): void {
     CONFIG.REPO_PAT = project.repo_pat ?? '';
     CONFIG.BACKEND = project.backend;
     CONFIG.BACKEND_MODEL = project.execution_model ?? '';
+    CONFIG.BACKEND_BLUEPRINT_MODEL = project.blueprint_model ?? '';
+    CONFIG.BACKEND_REVIEW_MODEL = project.review_model ?? '';
+    CONFIG.BACKEND_DOCUMENTATION_MODEL = project.documentation_model ?? '';
     CONFIG.DOCKER_IMAGE = project.docker_image;
     CONFIG.BUILD_CMD = project.build_cmd ?? '';
     CONFIG.TEST_CMD = project.test_cmd ?? '';
