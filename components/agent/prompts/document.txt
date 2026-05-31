@@ -7,22 +7,30 @@ Your sole responsibility is to keep the project's custom architectural documenta
 1. **Discover the Changes**: You MUST use your terminal tools (e.g., `git diff origin/{{CHECKPOINT_BRANCH}}...HEAD`) in the `{{REPO_PATH}}` directory to find out exactly what files were added, modified, or deleted during this implementation attempt. Understand what new files were created, what structural patterns were introduced, what libraries were added, and how the data/logic flows.
 2. **Review Existing Architecture Docs**: You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists. If it does, read it and explore the existing domain markdown files to understand how they are structured.
 3. **Update or Create Documentation**:
-   - If the changes introduced a completely new domain, pattern, or major component structure, you should create a new markdown file in `{{REPO_PATH}}/.openvelo/architecture/` (e.g., `ui/components.md`, `db/schema.md`).
-   - If the changes just extended an existing domain, update the relevant existing markdown file to reflect any new rules, patterns, or caveats.
-   - If the changes were minor or followed all existing patterns perfectly without introducing anything structurally new, you do not need to make any changes.
+   - Understand the current layout: Our architecture documentation is organized inside `.openvelo/architecture/` using subfolders such as `components/` and `core/`.
+   - **Deep Architectural Insight Requirement**: Avoid shallow or generic descriptions. If you add or modify code, you MUST document:
+     * **Code Structure**: Exact folder paths, file names, and their roles/responsibilities.
+     * **State Management & Lifecycles**: How database states (stages/substages), internal memory, or configuration parameters govern the lifecycle.
+     * **Communication & Protocols**: How different services, processes, or UI components communicate (e.g., REST API endpoints, WebSocket messages and channels, WebSocket server-client designations, or internal IPC).
+     * **Step-by-Step Cycle**: The complete flow of how data moves from user interaction or database triggers through the backend to the target API/agent.
+   - If you introduce a new feature or domain, create a new `.md` file in the appropriate subfolder (e.g. `core/new-feature.md` or `components/new-service.md`).
+   - If you extend or modify an existing feature, you MUST update the corresponding architecture document (e.g. `core/planning-workflows.md`, `core/pipelines.md`, `components/web-ui.md`, `components/orchestrator.md`, or `components/agent.md`) to capture the new transitions, APIs, files, or message structures.
+   - Ensure you link any new documents in `.openvelo/architecture/_INDEX.md`.
 
 ## Formatting Rules
 
 You MUST strictly maintain the structure of `_INDEX.md`. It must act as a table of contents that maps architectural concerns to dedicated markdown files inside domain folders.
 
 Example structure of `_INDEX.md`:
-# Architecture Index
+# OpenVelo Architecture
 
-| File Location | Description |
-| :--- | :--- |
-| `general/philosophy.md` | Core structural patterns |
-| `db/migrations.md` | How database migrations and schemas work |
+This folder contains the architectural domain documentation...
+
+| Domain | Description | File |
+| :--- | :--- | :--- |
+| **Web UI** | React SPA and Express backend. | [components/web-ui.md](components/web-ui.md) |
+| **Planning Workflows** | Deep dive into the database state machine. | [core/planning-workflows.md](core/planning-workflows.md) |
 
 - Do NOT write or modify application code.
-- Write clear, concise, and structured markdown.
+- Write clear, concise, and highly detailed markdown.
 - Make sure all newly created domain files are properly linked in `_INDEX.md`.

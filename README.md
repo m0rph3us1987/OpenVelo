@@ -48,6 +48,7 @@
   - [Agent](#agent)
   - [Orchestrator](#orchestrator)
   - [Web UI](#web-ui)
+- [Guides / Tutorials](#guides--tutorials)
 
 ---
 
@@ -95,10 +96,11 @@ OpenVelo consists of three components that work together. All AI interactions ar
                                               ▼
                                ┌───────────────────────────┐
                                │  Agent Container(s)       │
-                               │  5-phase lifecycle:       │
+                               │  6-phase lifecycle:       │
                                │  Setup → Blueprint →      │
                                │  [Implementing → Build    │
-                               │  & Test → Review]* → Push │
+                               │  & Test → Review]* →      │
+                               │  Documenting → Push       │
                                │                           │
                                │  AI via OpenCode serve    │
                                │  ┌─────────────────────┐  │
@@ -115,8 +117,8 @@ OpenVelo consists of three components that work together. All AI interactions ar
 1. **Plan**: Click the **Plan** button on the project page to open the Planning modal. Chat with the AI through Analyze → Collect → Domain → Quiz → Assessment phases to produce either a `REQUIREMENT.MD` + structured backlog (requirement chat) or a User Story (feature chat).
 2. **Push**: Send the backlog or story to the project with a single click.
 3. **Execute**: The Web UI spawns an Orchestrator for the project (child process in dev mode, Docker container in Docker mode). The Orchestrator dials back to the web-ui via WebSocket and receives job assignments.
-4. **Agent**: Each container clones the repo, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, or Azure DevOps). All AI interactions go through OpenCode, which proxies to the configured LLM provider and model.
-5. **Monitor**: The Execute dashboard streams live logs and job status from the Orchestrator through the web-ui WebSocket. Each job displays its current pipeline stage (Setup → Blueprint → Implementing → Build & Test → Review → Push) and retry counter in real time.
+4. **Agent**: Each container clones the repo, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, updates architectural documentation, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, or Azure DevOps). All AI interactions go through OpenCode, which proxies to the configured LLM provider and model.
+5. **Monitor**: The Execute dashboard streams live logs and job status from the Orchestrator through the web-ui WebSocket. Each job displays its current pipeline stage (Setup → Blueprint → Implementing → Build & Test → Review → Documenting → Push) and retry counter in real time.
 
 ---
 
@@ -276,10 +278,10 @@ The **Planning modal** supports three modes:
 
 ## Execution Pipeline
 
-Each agent runs a 5-phase workflow inside its container, with the middle three phases forming a retry loop:
+Each agent runs a 6-phase workflow inside its container, with the middle three phases forming a retry loop:
 
 ```
-Setup → Blueprint → [ Implementing → Build & Test → Review ]* → Push
+Setup → Blueprint → [ Implementing → Build & Test → Review ]* → Documenting → Push
                       ▲                        │       │
                       └────── on failure ──────┘───────┘
 ```
@@ -291,6 +293,7 @@ Setup → Blueprint → [ Implementing → Build & Test → Review ]* → Push
 | **Implementing** | `implementing`   | On the first attempt, sends the full story, repo context, and any prior error history to the AI. On retries, sends only the error text for targeted fixes |
 | **Build & Test** | `testing`        | Runs the configured build command and test command. If either fails, the errors are appended to `BUILD_ERRORS.md` and the loop retries from Implement    |
 | **Review**       | `reviewing`      | A fresh AI session self-reviews the diff and produces a verdict (`pass` or `fail`). If it fails, findings are appended to `BUILD_ERRORS.md` and the loop retries from Implement |
+| **Documenting**  | `documenting`    | Automatically analyzes codebase changes, checks `.openvelo/architecture/_INDEX.md`, and updates or creates architectural domain documentation.          |
 | **Push**         | `pushing`        | Commits changes, rebases onto the target branch, pushes with `--force-with-lease`, opens a Pull Request, and auto-merges                                |
 
 The Implementing → Build & Test → Review loop shares a single retry counter (configured via `agent_max_retries`, default 3). The Implementing phase reuses the same AI session across retries so conversation history accumulates, while Review creates a fresh session each attempt.
@@ -402,7 +405,7 @@ All scripts are run from the repository root.
 
 ### Agent
 
-The agent runs inside a Docker container and executes the 5-phase workflow (Setup → Blueprint → [Implementing → Build & Test → Review]* → Push) for a single User Story. It communicates with the orchestrator via WebSocket.
+The agent runs inside a Docker container and executes the 6-phase workflow (Setup → Blueprint → [Implementing → Build & Test → Review]* → Documenting → Push) for a single User Story. It communicates with the orchestrator via WebSocket.
 
 ### Orchestrator
 
@@ -428,3 +431,9 @@ The web-ui is a React SPA (Vite + Tailwind CSS + Radix UI) backed by an Express 
 - **Settings**: Application-wide settings including theme customization and security toggle.
 - **Database**: SQLite via `better-sqlite3` for all persistent state.
 - **Orchestrator lifecycle**: Spawns and manages orchestrator processes/containers via `dockerode`.
+
+---
+
+## Guides / Tutorials
+
+- [Step-by-Step Guide: Plan & Build Features Autonomously](docs/tutorial01.md): A detailed, step-by-step walk-through demonstrating how to configure projects, use the interactive requirements planner, spawn the containerized orchestrator, monitor unit-testing loops, and inspect Gitea pull requests to autonomously build features inside OpenVelo itself.
