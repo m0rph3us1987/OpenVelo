@@ -67,7 +67,7 @@ export const CONFIG = {
     REPO_PAT: process.env.REPO_PAT || '',
 
     // Backend
-    BACKEND: process.env.BACKEND || 'opencode',
+    BACKEND: process.env.BACKEND || 'kilo',
     BACKEND_MODEL: process.env.BACKEND_MODEL || '',
     BACKEND_BLUEPRINT_MODEL: '',
     BACKEND_REVIEW_MODEL: '',

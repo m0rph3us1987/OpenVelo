@@ -2,6 +2,7 @@ import { CONFIG } from './config.js';
 import { dockerManager } from './docker.js';
 import { connectToAgent } from './wss.js';
 import { send } from './ws-client.js';
+import { clearJobStatus } from './job-status.js';
 
 export let isPaused = false;
 export let isShuttingDown = false;
@@ -79,7 +80,7 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
     // Notify web-ui we are starting
     send({ type: 'job_update', jobId: job.id, status: 'RUNNING', timestamp: new Date().toISOString() });
 
-    const storyContent = formatStoryMarkdownFromJob(job);
+    const jobContent = formatJobMarkdownFromJob(job);
 
     let containerId: string;
     let host: string;
@@ -102,7 +103,7 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
     send({ type: 'job_update', jobId: job.id, status: 'RUNNING', containerId, startedAt, timestamp: new Date().toISOString() });
 
     try {
-        await connectToAgent(job.id, containerId, host, port, job.title ?? '', storyContent);
+        await connectToAgent(job.id, containerId, host, port, job.title ?? '', jobContent);
     } catch (err) {
         console.error(`[JOB ${job.id}] Agent connection failed:`, err);
         send({ type: 'job_update', jobId: job.id, status: 'FAILED', error: String(err), timestamp: new Date().toISOString() });
@@ -110,6 +111,7 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
         activeContainers.delete(job.id);
         jobsInProgress.delete(job.id);
         activeJobCount--;
+        clearJobStatus(job.id);
         // Only signal readiness if not shutting down — prevents re-assigning jobs during stop
         if (!isPaused && !isShuttingDown) {
             send({ type: 'ready' });
@@ -117,6 +119,6 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
     }
 }
 
-function formatStoryMarkdownFromJob(job: JobPayload): string {
-    return `# User Story ${job.id}: ${job.title || 'No Title'}\n\n## Description\n${job.description || 'No description provided.'}\n\n## Acceptance Criteria\n${job.acceptance_criteria || 'No acceptance criteria provided.'}\n`;
+function formatJobMarkdownFromJob(job: JobPayload): string {
+    return `# Job ${job.id}: ${job.title || 'No Title'}\n\n## Description\n${job.description || 'No description provided.'}\n`;
 }

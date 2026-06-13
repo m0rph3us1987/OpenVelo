@@ -136,28 +136,28 @@ export class DockerManager {
 
         const binds: string[] = [];
         
-        const opencodeAuthSource = path.join(homeDir, '.local', 'share', 'opencode', 'auth.json');
-        const opencodeAuthTarget = containerPath('/root/.local/share/opencode/auth.json', 'C:/Users/ContainerAdministrator/.local/share/opencode/auth.json');
-        const opencodeAuthCheckPath = containerPath('/root/.local/share/opencode/auth.json', 'C:/Users/ContainerAdministrator/.local/share/opencode/auth.json');
+        const kiloAuthSource = path.join(homeDir, '.local', 'share', 'kilo', 'auth.json');
+        const kiloAuthTarget = containerPath('/root/.local/share/kilo/auth.json', 'C:/Users/ContainerAdministrator/.local/share/kilo/auth.json');
+        const kiloAuthCheckPath = containerPath('/root/.local/share/kilo/auth.json', 'C:/Users/ContainerAdministrator/.local/share/kilo/auth.json');
 
         const authSourceExists = process.env.OPENVELO_CONTAINER_MODE === 'true'
-            ? fs.existsSync(opencodeAuthCheckPath)
-            : fs.existsSync(opencodeAuthSource);
+            ? fs.existsSync(kiloAuthCheckPath)
+            : fs.existsSync(kiloAuthSource);
 
         if (authSourceExists) {
-            binds.push(`${toDockerPath(opencodeAuthSource)}:${opencodeAuthTarget}:rw`);
+            binds.push(`${toDockerPath(kiloAuthSource)}:${kiloAuthTarget}:rw`);
         }
 
-        const opencodeConfigSource = path.join(homeDir, '.config', 'opencode');
-        const opencodeConfigTarget = containerPath('/root/.config/opencode', 'C:/Users/ContainerAdministrator/.config/opencode');
-        const opencodeConfigCheckPath = containerPath('/root/.config/opencode', 'C:/Users/ContainerAdministrator/.config/opencode');
+        const kiloConfigSource = path.join(homeDir, '.config', 'kilo');
+        const kiloConfigTarget = containerPath('/root/.config/kilo', 'C:/Users/ContainerAdministrator/.config/kilo');
+        const kiloConfigCheckPath = containerPath('/root/.config/kilo', 'C:/Users/ContainerAdministrator/.config/kilo');
 
         const configSourceExists = process.env.OPENVELO_CONTAINER_MODE === 'true'
-            ? fs.existsSync(opencodeConfigCheckPath)
-            : fs.existsSync(opencodeConfigSource);
+            ? fs.existsSync(kiloConfigCheckPath)
+            : fs.existsSync(kiloConfigSource);
 
         if (configSourceExists) {
-            binds.push(`${toDockerPath(opencodeConfigSource)}:${opencodeConfigTarget}:rw`);
+            binds.push(`${toDockerPath(kiloConfigSource)}:${kiloConfigTarget}:rw`);
         }
 
         const skillsHostPath = CONFIG.SKILLS_HOST_PATH;
@@ -182,6 +182,7 @@ export class DockerManager {
                     `AGENT_PORT=${agentInternalPort}`,
                     `JOB_ID=${jobId}`,
                     `AGENT_MAX_RETRIES=${CONFIG.AGENT_MAX_RETRIES}`,
+                    `AGENT_MAX_TIMEOUT=${CONFIG.AGENT_MAX_TIMEOUT}`,
                 ],
                 ExposedPorts: {
                     [`${agentInternalPort}/tcp`]: {}

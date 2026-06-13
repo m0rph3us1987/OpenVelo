@@ -75,6 +75,42 @@ function httpPost(url: string, body: unknown): Promise<{ status: number; data: u
   });
 }
 
+function httpGet(url: string): Promise<{ status: number; data: unknown }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const options: http.RequestOptions = {
+      hostname: parsed.hostname,
+      port: parseInt(parsed.port, 10),
+      path: parsed.pathname,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    };
+    const req = http.request(options, (res) => {
+      let raw = '';
+      res.on('data', (c) => { raw += c; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode ?? 0, data: JSON.parse(raw) }); }
+        catch { resolve({ status: res.statusCode ?? 0, data: raw }); }
+      });
+      res.on('error', (err) => {
+        reject(new Error(`Response stream error: ${err.message}`));
+      });
+    });
+    req.setTimeout(1800_000);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error(`Request timed out after 1800s: ${url}`));
+    });
+    req.on('error', (err) => {
+      reject(err);
+    });
+    req.end();
+  });
+}
+
+
 function httpDelete(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -111,6 +147,16 @@ export class OpenCodeServeClient {
   private sseRequest: http.ClientRequest | null = null;
   private currentActiveSessionId: string | null = null;
   private loggedToolCalls = new Set<string>();
+  private sessionSseLogs = new Map<string, string[]>();
+
+  private appendSessionSseLog(sessionId: string, log: string): void {
+    let logs = this.sessionSseLogs.get(sessionId);
+    if (!logs) {
+      logs = [];
+      this.sessionSseLogs.set(sessionId, logs);
+    }
+    logs.push(log);
+  }
 
   constructor(chatId: number, chatDir: string, env: Record<string, string | undefined>) {
     this.chatId = chatId;
@@ -135,19 +181,25 @@ export class OpenCodeServeClient {
 
   private async _start(): Promise<void> {
     return new Promise((resolve, reject) => {
-      loggerService.append(this.chatId, `Starting opencode serve…`);
+      loggerService.append(this.chatId, `Starting kilo serve…`);
+
+      const env: Record<string, string | undefined> = {
+        ...this.env,
+        KILO_YOLO: '1',
+        OPENCODE_YOLO: '1',
+      };
 
       let proc: ReturnType<typeof spawn> | null = null;
       try {
-        proc = spawn('opencode', ['serve', '--port', '0'], {
+        proc = spawn('kilo', ['serve', '--port', '0'], {
           cwd: this.chatDir,
-          env: this.env,
+          env,
           shell: true,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (err) {
         loggerService.append(this.chatId, `spawn failed: ${err}`);
-        reject(new Error(`Failed to spawn opencode: ${err}`));
+        reject(new Error(`Failed to spawn kilo: ${err}`));
         return;
       }
 
@@ -155,7 +207,7 @@ export class OpenCodeServeClient {
 
       const timeout = setTimeout(() => {
         if (proc) proc.kill();
-        reject(new Error('opencode serve did not report its port within 15 s'));
+        reject(new Error('kilo serve did not report its port within 15 s'));
       }, 15_000);
 
       const tryParseLine = (line: string) => {
@@ -164,7 +216,7 @@ export class OpenCodeServeClient {
           clearTimeout(timeout);
           this.port = parseInt(m[2], 10);
           this.baseUrl = `http://127.0.0.1:${this.port}`;
-          loggerService.append(this.chatId, `opencode serve ready on port ${this.port}`);
+          loggerService.append(this.chatId, `kilo serve ready on port ${this.port}`);
           void this._connectSse();
           resolve();
         }
@@ -185,24 +237,24 @@ export class OpenCodeServeClient {
         stderrBuf = lines.pop() ?? '';
         for (const l of lines) {
           tryParseLine(l);
-          loggerService.append(this.chatId, `[opencode stderr] ${l}`);
+          loggerService.append(this.chatId, `[kilo stderr] ${l}`);
         }
       });
 
       proc.on('error', (err) => {
         clearTimeout(timeout);
-        loggerService.append(this.chatId, `opencode serve error: ${err}`);
+        loggerService.append(this.chatId, `kilo serve error: ${err}`);
         reject(err);
       });
 
       proc.on('exit', (code) => {
         clearTimeout(timeout);
-        loggerService.append(this.chatId, `opencode serve exited (code ${code})`);
+        loggerService.append(this.chatId, `kilo serve exited (code ${code})`);
         this.serverProcess = null;
         this.startPromise = null;
         this._disconnectSse();
         if (code !== 0 && code !== null) {
-          reject(new Error(`opencode serve exited with code ${code}`));
+          reject(new Error(`kilo serve exited with code ${code}`));
         }
       });
     });
@@ -276,10 +328,6 @@ export class OpenCodeServeClient {
   }
 
   private _handleSseBlock(block: string): void {
-    loggerService.appendRawSse(this.chatId, block);
-    if (getUiSetting('debug_sse_console') === 'true') {
-      console.log('[SSE Block]', block);
-    }
     const lines = block.split('\n');
     const dataLine = lines.find(l => l.startsWith('data:'));
     if (!dataLine) return;
@@ -295,33 +343,68 @@ export class OpenCodeServeClient {
     const properties = payload['properties'] as Record<string, unknown> | undefined;
     if (!eventType || !properties) return;
 
-    if (eventType === 'message.part.updated') {
-      const part = properties?.['part'] as Record<string, unknown> | undefined;
-      if (part?.['type'] === 'tool') {
-        const toolName = part['tool'] ?? 'unknown';
-        const state = part['state'] as Record<string, unknown> | undefined;
-        const callID = part['callID'] as string | undefined;
+    const sessionID = (properties?.['sessionID'] || properties?.['sessionId'] || payload['sessionID'] || payload['sessionId']) as string | undefined;
 
-        if (state?.['status'] === 'running') {
-          if (callID && !this.loggedToolCalls.has(callID)) {
-            this.loggedToolCalls.add(callID);
-            const input = state['input'] as Record<string, unknown> | undefined;
-            loggerService.append(this.chatId, '\n' + this.formatToolLog(String(toolName), input) + '\n');
-          }
-        } else if (callID && this.loggedToolCalls.has(callID)) {
-          this.loggedToolCalls.delete(callID);
-        }
-      } else if (part?.['type'] === 'text' || part?.['type'] === 'reasoning') {
-        // text is already streamed via message.part.delta - skip to avoid duplicates
-      }
+    // Only append raw SSE blocks to the main chat if it belongs to the active main session
+    if (!sessionID || sessionID === this.currentActiveSessionId) {
+      loggerService.appendRawSse(this.chatId, block);
+    }
+
+    if (getUiSetting('debug_sse_console') === 'true') {
+      console.log('[SSE Block]', block);
+    }
+
+    if (eventType === 'message.part.updated') {
+      // Tool part lifecycle is observed via polling /session/{id}/message
+      // rather than SSE, because the `message.part.updated` event for tools
+      // can fire with state.status === 'running' but state.input still empty
+      // (e.g. while the model streams tool arguments). Logging it here would
+      // mark the callID as seen and prevent the polling handler from emitting
+      // the final log with the real input — resulting in "[READING] unknown".
       return;
     }
 
     if (eventType === 'message.part.delta') {
       const delta = properties?.['delta'] as string | undefined;
       if (delta) {
-        loggerService.append(this.chatId, delta);
+        if (!sessionID || sessionID === this.currentActiveSessionId) {
+          loggerService.append(this.chatId, delta);
+        }
       }
+      return;
+    }
+
+    if (eventType === 'file.edited') {
+      const file = properties?.['file'] as string | undefined;
+      if (file) {
+        if (sessionID) {
+          this.appendSessionSseLog(sessionID, `\n[FILE EDITED] ${file}\n`);
+        }
+        if (!sessionID || sessionID === this.currentActiveSessionId) {
+          loggerService.append(this.chatId, `\n[FILE EDITED] ${file}\n`);
+        }
+      }
+      return;
+    }
+
+    if (eventType === 'permission.asked') {
+      const permissionID = properties['id'] as string | undefined;
+      const permSessionID = properties['sessionID'] as string | undefined;
+      if (permissionID && permSessionID) {
+        this.appendSessionSseLog(permSessionID, `[permission.asked] auto-granting ${permissionID}\n`);
+        if (!permSessionID || permSessionID === this.currentActiveSessionId) {
+          loggerService.append(this.chatId, `[permission.asked] auto-granting ${permissionID}\n`);
+        }
+        void httpPost(
+          `${this.baseUrl}/session/${permSessionID}/permissions/${permissionID}`,
+          { response: 'grant', remember: true },
+        );
+      }
+      return;
+    }
+
+    if (eventType === 'session.diff') {
+      // Do not log diff event details to avoid bloating the output
       return;
     }
   }
@@ -351,8 +434,11 @@ export class OpenCodeServeClient {
    * @param text       The full turn prompt
    * @param model      Optional "provider/model" string (e.g. "anthropic/claude-3-5-sonnet-20241022")
    */
-  async sendMessage(sessionId: string, text: string, model?: string): Promise<MessageResult> {
-    this.currentActiveSessionId = sessionId;
+  async sendMessage(sessionId: string, text: string, model?: string, skipMainLog = false): Promise<MessageResult> {
+    if (!skipMainLog) {
+      this.currentActiveSessionId = sessionId;
+    }
+    this.loggedToolCalls.clear();
     const [providerID, modelID] = model?.includes('/') ? model.split('/', 2) : [undefined, undefined];
     const modelObj = providerID && modelID ? { providerID, modelID } : undefined;
 
@@ -362,17 +448,84 @@ export class OpenCodeServeClient {
       model: modelObj,
     };
 
-    const result = await httpPost(`${this.baseUrl}/session/${sessionId}/message`, body);
-    if (result.status >= 400) {
-      throw new Error(`sendMessage HTTP ${result.status}: ${JSON.stringify(result.data)}`);
+    let pollInterval: NodeJS.Timeout | null = null;
+    if (!skipMainLog) {
+      pollInterval = setInterval(async () => {
+        try {
+          await this._pollToolCalls(sessionId);
+        } catch {
+          // ignore
+        }
+      }, 400);
     }
-    return result.data as MessageResult;
+
+    try {
+      const result = await httpPost(`${this.baseUrl}/session/${sessionId}/message`, body);
+      if (result.status >= 400) {
+        throw new Error(`sendMessage HTTP ${result.status}: ${JSON.stringify(result.data)}`);
+      }
+      return result.data as MessageResult;
+    } finally {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      if (!skipMainLog) {
+        try {
+          await this._pollToolCalls(sessionId);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  async reconstructSessionLogs(sessionId: string): Promise<string> {
+    if (!this.baseUrl) return '';
+    try {
+      const url = `${this.baseUrl}/session/${sessionId}/message`;
+      const res = await httpGet(url);
+      if (res.status !== 200) return '';
+      const messages = res.data as any[];
+      if (!messages || !Array.isArray(messages)) return '';
+
+      const logLines: string[] = [];
+      for (const msg of messages) {
+        if (msg.info?.role === 'assistant' && msg.parts && Array.isArray(msg.parts)) {
+          for (const part of msg.parts) {
+            if (part.type === 'tool') {
+              const toolName = part.tool ?? 'unknown';
+              const state = part.state;
+              const input = state?.['input'] as Record<string, unknown> | undefined;
+              const status = state?.['status'] as string | undefined;
+              const isFinished = status === 'completed' || status === 'failed';
+              if (isFinished || !this.isToolInputIncomplete(String(toolName), input)) {
+                logLines.push(`\n${this.formatToolLog(String(toolName), input)}\n`);
+              }
+            } else {
+              const content = part.text || part.thought || part.reasoning || part.content;
+              if (typeof content === 'string' && content) {
+                logLines.push(content);
+              }
+            }
+          }
+        }
+      }
+      const sseLogs = this.sessionSseLogs.get(sessionId);
+      if (sseLogs && sseLogs.length > 0) {
+        logLines.push(...sseLogs);
+      }
+      return logLines.join('');
+    } catch {
+      return '';
+    }
   }
 
   async abortSession(sessionId: string): Promise<void> {
     if (this.currentActiveSessionId === sessionId) {
       this.currentActiveSessionId = null;
     }
+    this.sessionSseLogs.delete(sessionId);
     try {
       await httpPost(`${this.baseUrl}/session/${sessionId}/abort`, {});
     } catch { /* ignore — session may already be gone */ }
@@ -382,6 +535,7 @@ export class OpenCodeServeClient {
     if (this.currentActiveSessionId === sessionId) {
       this.currentActiveSessionId = null;
     }
+    this.sessionSseLogs.delete(sessionId);
     try {
       await httpDelete(`${this.baseUrl}/session/${sessionId}`);
     } catch { /* ignore */ }
@@ -416,6 +570,15 @@ export class OpenCodeServeClient {
       case 'edit':
         return `[EDIT] ${input?.['filePath'] ?? 'unknown'}`;
 
+      case 'task': {
+        const description = input?.['description'] as string | undefined;
+        const subagentType = input?.['subagent_type'] as string | undefined;
+        const taskId = input?.['task_id'] as string | undefined;
+        const headline = description || (taskId ? `resuming ${taskId}` : 'subagent task');
+        const tag = subagentType ? ` (@${subagentType})` : '';
+        return `[TASK] ${headline}${tag}`;
+      }
+
       default:
         return `[TOOL] ${toolName}: ${JSON.stringify(input ?? {})}`;
     }
@@ -433,5 +596,65 @@ export class OpenCodeServeClient {
       lines.push(`  [${check}] ${todo.content ?? ''}`);
     }
     return lines.join('\n');
+  }
+
+  private async _pollToolCalls(sessionId: string): Promise<void> {
+    if (!this.baseUrl) return;
+    const url = `${this.baseUrl}/session/${sessionId}/message`;
+    const res = await httpGet(url);
+    if (res.status !== 200) return;
+    const messages = res.data as Array<{
+      info?: { role?: string };
+      parts?: Array<{
+        type: string;
+        callID?: string;
+        tool?: string;
+        state?: Record<string, unknown>;
+      }>;
+    }>;
+    if (!messages || !Array.isArray(messages)) return;
+
+    for (const msg of messages) {
+      if (msg.info?.role === 'assistant' && msg.parts && Array.isArray(msg.parts)) {
+        for (const part of msg.parts) {
+          if (part.type === 'tool') {
+            const toolName = part.tool ?? 'unknown';
+            if (toolName === 'diff') {
+              continue;
+            }
+            const callID = part.callID;
+            const state = part.state;
+            if (callID && !this.loggedToolCalls.has(callID)) {
+              const input = state?.['input'] as Record<string, unknown> | undefined;
+              const status = state?.['status'] as string | undefined;
+              const isFinished = status === 'completed' || status === 'failed';
+              if (!isFinished && this.isToolInputIncomplete(String(toolName), input)) {
+                continue;
+              }
+              this.loggedToolCalls.add(callID);
+              loggerService.append(this.chatId, '\n' + this.formatToolLog(String(toolName), input) + '\n');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private isToolInputIncomplete(toolName: string, input?: Record<string, unknown>): boolean {
+    if (!input) return true;
+    switch (toolName) {
+      case 'read':
+      case 'write':
+      case 'edit':
+        return !input['filePath'] || typeof input['filePath'] !== 'string';
+      case 'bash':
+        return !input['command'] || typeof input['command'] !== 'string';
+      case 'glob':
+        return !input['pattern'] || typeof input['pattern'] !== 'string';
+      case 'grep':
+        return !input['pattern'] || typeof input['pattern'] !== 'string';
+      default:
+        return false;
+    }
   }
 }

@@ -71,6 +71,10 @@ async function handlePlan(chatId: number): Promise<void> {
     await client.ensureStarted();
   } catch (err) {
     console.log(`[workflow:domain:plan] Server start failed: ${(err as Error).message}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'domain', 'error');
     stageWsManager.broadcastToStage(chatId, 'domain', { type: 'sub_stage', sub_stage: 'error' });
     return;
@@ -160,6 +164,10 @@ async function handlePlan(chatId: number): Promise<void> {
     stageWsManager.broadcastToStage(chatId, 'domain', { type: 'sub_stage', sub_stage: 'quiz' });
   } catch (err) {
     console.log(`[workflow:domain:plan] sendMessage failed: ${err}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'domain', 'error');
     stageWsManager.broadcastToStage(chatId, 'domain', { type: 'sub_stage', sub_stage: 'error' });
   }

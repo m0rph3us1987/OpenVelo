@@ -1,93 +1,70 @@
 # Agent Architecture
 
-The `agent` component runs exclusively inside an isolated Linux Docker container and executes the core AI coding lifecycle (Setup → Plan → Implement → Test → Review → Document → Push) for a single User Story.
+The `agent` component runs inside an isolated Linux or Windows Docker container and executes the AI coding lifecycle for a single User Story: `setupConfig → diagnostics → setup → blueprinting → implementing → testing → reviewing → documenting → pushing`.
 
 ---
 
 ## 1. Directory Structure & Key Files
-- `opencode.json`: **OpenCode Agent Permissions**. Located at repository root, this configuration file controls opencode agent permissions when running inside the container (e.g., external directory access to `/tmp` and `/SKILLS`).
-- `src/`: TypeScript source code.
-  - `index.ts`: **Entry Point**. Overrides `process.stdout.write` and `process.stderr.write` to route all container output through `messenger.log()` (WebSockets) before printing. It starts the WebSocket server (`messenger.startServer()`) and waits for the Orchestrator's handshake.
-  - `workflow.ts`: **The Core Orchestrator**. Implements the `WorkflowEngine` class, containing the step-by-step state machine for executing and recovering coding jobs.
-  - `messenger.ts`: **Agent-to-Orchestrator WebSocket Connection**. Starts a `WebSocketServer` listening on `CONFIG.AGENT_PORT` (normally 3001) that awaits connection from the Orchestrator.
-  - `opencode-server.ts`: **LLM Daemon Manager**. Starts, monitors, and stops the local `opencode serve` process within the container to proxy model requests.
-  - `session.ts`: **LLM History Registry**. Holds specific instances of `AgentSession` (`setup`, `plan`, `implement`, `document`) to maintain conversational history across retries.
-  - `shell.ts`: Helper for spawning secure host shell commands and checking watch mode constraints.
-  - `dotnet.ts`, `github.ts`, `gitea.ts`, `ado.ts`: Repository-specific tooling integrations.
-- `prompts/`: Contains `.txt` templates defining the system instructions for each model task (`setup.txt`, `plan.txt`, `implement.txt`, `review.txt`, `document.txt`).
+- `src/`: TypeScript source.
+  - `index.ts` — Entry point. Overrides `process.stdout.write`/`stderr.write` to route output through `messenger.log()` (WebSocket). Starts the WebSocket server and waits for the Orchestrator's `handshake`.
+  - `workflow.ts` — `WorkflowEngine` class with the step-by-step state machine.
+  - `messenger.ts` — `WebSocketServer` on `CONFIG.AGENT_PORT` (default 3001) accepting the Orchestrator's connection. Exposes `log()`, `sendAgentStatus()`, `sendCheckpointDone()`, `sendFinish()`.
+  - `agent-status.ts` — Singleton holding the agent's reactive stage state (`stage`, `attempt`, `maxRetries`, `plan`, `usage`, `context`). Auto-emits updates via `sendAgentStatus()` whenever a field changes. `messenger.ts` calls `AgentStatus.attach(ws)` on connection.
+  - `acp-client.ts` — Clean, dedicated client for the `kilo acp` subprocess. Owns the spawned child process and communicates using JSON-RPC 2.0 over stdio, parsing tool logs and reasoning deltas.
+  - `acp-schema.ts` — Types and schemas for the ACP protocol.
+  - `logger.ts` — Per-chat in-process logger (separate from `messenger.ts`).
+  - `shell.ts` — Secure shell command spawning + watch-mode detection.
+  - `config.ts` — Static `CONFIG` + `applyHandshake()` which populates it from the Orchestrator's `handshake` payload.
+  - `dotnet.ts` — .NET-specific tooling.
+  - `github.ts`, `gitea.ts`, `ado.ts`, `bitbucket.ts` — Per-host `createAndMergePR()` integrations.
+- `prompts/`: Per-phase prompt templates — `setup.txt`, `planner.txt`, `implementer.txt`, `review.txt`, `document.txt`, `test.txt`.
 
----
+## 2. Communication
 
-## 2. Communication and Lifecycle Flow
+The agent receives a **`handshake`** message (not `configure`) from the Orchestrator. The Web-UI sends `configure` to the Orchestrator (see [components/web-ui.md](web-ui.md)).
 
-### Step 1: Initialization and Handshake
-1. The container boots, executing `index.ts`.
-2. The agent starts its WebSocket server on `3001`.
-3. The Orchestrator (WebSocket Client) dials in and sends the `configure` payload containing project configuration including **per-phase model identifiers** (`blueprint_model`, `review_model`, `documentation_model`).
-4. The agent parses the config (Git URL, token, build/test commands, per-phase LLM models, user story description) using `applyHandshake()`, and triggers `WorkflowEngine.execute()`.
+On handshake, the agent calls `applyHandshake()` which sets `REPO_URL`, `REPO_HOST`, `REPO_PAT`, `BACKEND`, and the four per-phase model fields (`execution_model` → `BACKEND_MODEL`, `blueprint_model` → `BACKEND_BLUEPRINT_MODEL`, `review_model` → `BACKEND_REVIEW_MODEL`, `documentation_model` → `BACKEND_DOCUMENTATION_MODEL`), plus `BUILD_CMD`, `TEST_CMD`, `STAGING_BRANCH`, `JOB_TITLE`. It also writes the story to `/tmp/story.md` (via `CONFIG.STORY_PATH`). The agent also registers a `messenger.onCheckpoint()` handler that flushes work on Orchestrator-issued `checkpoint` messages.
 
-### Step 2: Phase 1: Setup (`setup()`)
-- Renders `prompts/setup.txt`.
-- Clones the target git repository and checks out the project staging branch.
-- Performs shell diagnostics to check language/platform configurations (e.g. dotnet vs npm).
-- Starts `opencode serve` in the background to handle AI requests.
+## 3. Lifecycle Phases (`WorkflowEngine.execute()`)
 
-### Step 3: Phase 1.5: Planning & Blueprint (`plan()`)
-- Renders `prompts/plan.txt`.
-- Passes the user story backlog, acceptance criteria, and full directory tree to the LLM configured via `blueprint_model`.
-- The LLM creates `.openvelo/blueprints/IMPLEMENTATION_PLAN.md` mapping out the modifications needed.
+| # | Phase | Stage emitted | Key behavior |
+|---|-------|---------------|--------------|
+| 0 | `setupConfig()` | — | No-op log. |
+| 0 | `diagnostics()` | — | Verifies `which <BACKEND>` + `dotnet --version`. |
+| 1 | `setup()` | `setup` | `prepareRepository()` (clone + branch bootstrap + `kilo.json` write). `apt-get update`. Runs `.openvelo/setup.sh` if present. Runs `BUILD_CMD` and `TEST_CMD`. If they fail, runs an LLM-assisted setup adjustment loop using `setup.txt` prompt in a code-mode session (writes `/tmp/VERDICT` with `SETUP_OK`, `SETUP_ADJUSTED`, `BUILD_ERROR`, or `EMPTY_PROJECT`). |
+| 2 | `plan()` | `blueprinting` | Renders `planner.txt` via `BACKEND_BLUEPRINT_MODEL` (falls back to `BACKEND_MODEL` when unset). Writes `/tmp/IMPLEMENTATION_PLAN.md` (skeleton fallback if LLM omits it). Accepts `failureContext` for re-planning. |
+| 3 | Inner loop | `implementing` / `testing` / `reviewing` | See §4. `implement` uses `BACKEND_MODEL` and `implementer.txt`; `review` uses `BACKEND_REVIEW_MODEL` and `review.txt`. |
+| 4 | `document()` | `documenting` | Renders `document.txt` via `BACKEND_DOCUMENTATION_MODEL`. Runs `git add .openvelo/architecture` and commits if anything changed. |
+| 5 | `finish()` | `pushing` | See §5. |
 
-### Step 4: Inner Loop: Implement → Test → Review
-The Agent executes the core coding task inside a retry loop capped by `CONFIG.MAX_RETRIES` using `execution_model` for implementation and `review_model` for review phases:
+## 4. Unified Blueprinting → Implementing → Testing → Reviewing Loop
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                                                              │
-│                         implement()                          │
-│          (Sends plan, prompts, and gets edits)               │
-│                              │                               │
-└──────────────────────────────┼───────────────────────────────┘
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                            test()                            │
-│           (Runs project build_cmd and test_cmd)              │
-└──────────────┬───────────────────────────────┬───────────────┘
-               │                               │
-         [Tests Fail]                     [Tests Pass]
-               │                               │
-               ▼                               ▼
-┌──────────────────────────────┐ ┌─────────────────────────────┐
-│       fixImplementation()    │ │          review()           │
-│  (Appends errors, retries)   │ │  (Git stages code, self-   │
-│                              │ │   critiques diffs via LLM)  │
-└──────────────┬───────────────┘ └──────────────┬───────┬──────┘
-               │                                │       │
-      [Retries Exceeded]                 [Fail Verdict] │
-               │                                │       │
-               ▼                                ▼       │
-┌──────────────────────────────┐ ┌──────────────────────┐       │
-│        Re-Evaluate           │ │ fixImplementation()  │       │
-│ (Wipes implementation memory │ │ (Appends findings,   │       │
-│   and calls plan() again)    │ │  loops back to test) │       │
-└──────────────────────────────┘ └──────────────────────┘       │
-                                                                │
-                                                          [Pass Verdict]
-                                                                │
-                                                                ▼
-                                                         To Document Phase
-```
+- `blueprinting(whatToImplement)` — Renders `planner.txt` via `BACKEND_BLUEPRINT_MODEL` (falls back to `BACKEND_MODEL` when unset) to write `/tmp/IMPLEMENTATION_PLAN.md` guiding the changes. First turn gets original story; subsequent retry turns get failure/review context.
+- `implement()` — Mode-switches the same plan+implement session to `code` mode. On attempt 0, sends `implementer.txt` prompt. On later attempts, sends only the injected error/findings context.
+- `test()` — Runs `BUILD_CMD` and `TEST_CMD` under a code-mode session (uses `test.txt`). LLM writes `TEST_REPORT.json` under `CONFIG.HOME_DIR` containing `verdict` ('pass'|'build_failed'|'tests_failed') and `error_log`. If it fails, execution loops back to `blueprinting` to re-plan.
+- `review()` — Runs only after `test()` passes. Creates a fresh code-mode session (uses `review.txt`) via `BACKEND_REVIEW_MODEL`. LLM writes `REVIEW.json` under `CONFIG.HOME_DIR` with `verdict` ('pass'|'fail'), `findings`, and `repair_hint`. If it fails, execution loops back to `blueprinting` to re-plan using the repair hint/findings.
+- Capped by `CONFIG.MAX_RETRIES` (default 3) for the entire loop.
 
-**Note**: The `review()` phase uses the `review_model` configured per-project, falling back to `default_model` if not set.
+## 5. Finish (`finish()`)
 
-### Step 5: Phase 4: Document (`document()`)
-- Triggered after review passes.
-- Spawns the documentation step utilizing `prompts/document.txt` via `documentation_model`.
-- Compares git diffs (`git diff origin/{{CHECKPOINT_BRANCH}}...HEAD`) to discover structural code modifications.
-- Creates or updates specific markdown guides in `.openvelo/architecture/` (e.g., `components/` or `core/` subfolders) and maps them in `_INDEX.md`.
+- Removes the temporary `kilo.json` and `opencode.json` (so they never land in the user's repo) and refreshes `.gitignore`.
+- **Empty-diff short-circuit**: if `git diff --cached --name-only` is empty, checks out `STAGING_BRANCH`, deletes the work + checkpoint branches, exits successfully without creating a PR.
+- Otherwise: commit `feat: <JOB_TITLE>` → fetch `STAGING_BRANCH` → rebase onto `origin/STAGING_BRANCH` (aborts and throws on conflict) → force-push (`--force-with-lease`) the work branch `feature-<JOB_ID>-<timestamp>`.
+- Calls the PR creator based on `REPO_HOST`:
+  - `azure-devops` → `createAdoPR()`
+  - `gitea` → `createGiteaPR()`
+  - `bitbucket` → `createBitbucketPR()`
+  - default (GitHub) → `createGithubPR()`
+- Cleans up checkpoint + work branches, sends `messenger.sendFinish('success'|'error', { branch?, error?, maxRetriesReached? })`, then exits.
 
-### Step 6: Phase 5: Finish (`finish()`)
-- Git commits all remaining files.
-- Rebases onto target staging branch to avoid merge conflicts.
-- Forces pushes (`--force-with-lease`) to a remote branch named after `feature-{{JOB_ID}}`.
-- Interacts with GitHub (`github.ts`), Gitea (`gitea.ts`), or Azure DevOps (`ado.ts`) API endpoints to construct a pull request and trigger auto-merging if configured.
-- Issues a WebSocket `finish` event to the Orchestrator and exits.
+## 6. Stage / Log Events Sent via WebSocket
+
+| Event | When | Notes |
+|-------|------|-------|
+| `log` (info/error/warn/stdout/stderr) | Every console write | `index.ts` intercepts `stdout`/`stderr` and routes through `messenger.log()`. |
+| `stage` (setup/blueprinting/implementing/testing/reviewing/documenting/pushing) | Each phase entry | Includes `attempt` and `max_retries`. |
+| `plan` | Plan progression updates | Emits the list of plan entries, their status, and priorities. |
+| `usage` | LLM token usage delta | Emits cumulative tokens (input, output, cached, total). |
+| `context` | Cost / context window limits | Emits size, used window, and cost. |
+| `checkpoint_done` | In response to Orchestrator `checkpoint` | After `git commit` + `git push` of `feature-<JOB_ID>`. |
+| `finish` | Workflow complete | Includes `status` (`success`/`error`), `branch`, `error`, `maxRetriesReached`. |

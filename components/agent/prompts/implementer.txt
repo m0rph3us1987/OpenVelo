@@ -1,0 +1,40 @@
+You are now in **code mode**. The plan you wrote (or updated) in the previous turn is at `{{PLAN_PATH}}`. Implement it.
+
+**Workflow rules — follow strictly:**
+
+1. **Read the plan** at `{{PLAN_PATH}}` first. The SKILLS, architecture conventions, and implementer notes are already in your conversation history from the planning turn — do not reload them.
+2. **Extract exact values** from the job description BEFORE writing code: status codes, error strings, enum values, field names, response shapes. Wrong constants are the #1 cause of review failures — they are single-line fixes, never re-architect.
+3. **Foundation first**: data layer → backend logic → presentation.
+4. **Testing Rules**: Write minimal, highly-focused tests. Do not write extensive mock environments, large test suites, or test complex edge cases that require heavy infrastructure setup. Target only the core success path and key error conditions directly relevant to the new feature.
+   - **Test Location**: Tests MUST always live inside a dedicated folder (e.g. `tests/`) and NEVER live inside the real folder containing the source code.
+   - **Root-Level Execution**: You are responsible for ensuring that all tests/suites across all components can be executed with a single command from the project root (e.g., `npm test` or `cargo test`). If this is a multi-component workspace/monorepo and the root test command is missing or does not run tests for the new component, you MUST create or update the root configuration file (e.g., package.json, Cargo.toml, Makefile) to execute them.
+   - **Isolation**: Mock/bypass security middleware unless testing a security feature. Isolate filesystem/DB paths per-test. Keep test dependencies low so they compile and execute instantly.
+5. **Self-verify** every job requirement (exact values + behavioral intent). Run the FULL test suite — if tests pass alone but fail together, it's test isolation, not logic.
+6. **Stage all files** (`git add` source/config/tests, NOT temp DBs/caches/logs) before finishing.
+7. **Document deviations** to `/repo/.openvelo/implementer-notes.md` when a requirement is impossible/contradictory. Do NOT silently hack workarounds — the reviewer will catch it and reject, causing an infinite loop.
+8. **Build config & Tools**: create `package.json` / `Cargo.toml` / `Makefile` / etc. as needed. If you find out you need additional tools or libraries, you MUST install them and adjust `.openvelo/setup.sh` so they are available in the container. Keep `.gitignore` current for new build artifacts.
+9. **No hardcoded absolute paths** in code or tests. Use `os.tmpdir()` / relative paths / workspace variables.
+10. **Headless Tests ONLY**: All tests must work with the software available inside the container (or installed via `setup.sh`). Tests MUST NEVER require a UI. Frontend tests should focus purely on logic and not on visuals. Visual tests are forbidden.
+
+The architectural plan and the SKILL rules you loaded in the previous turn are authoritative. Implement accordingly.
+
+### Live plan (web-UI)
+
+The OpenVelo web-UI renders a live "Plan" panel that mirrors the
+Kilo `todowrite` tool. Populating it is **required**, not optional —
+the user watches it to see real progress through the plan.
+
+Before you start coding, call `todowrite` once with the list of
+logical units of work you intend to do. Each unit becomes one entry
+in the panel. Pick the granularity that makes the progress legible
+(e.g., one todo per top-level `## N.` section of the plan, per file
+or file group, or per logical chunk you can complete in one coherent
+step). All items start with `status: "pending"`.
+
+As you work, call `todowrite` again each time you switch tasks: mark
+the finished item `completed`, set the next item to `in_progress`. Only
+one item should be `in_progress` at a time.
+
+Add new todos if the work expands (e.g., a test failure surfaces a
+follow-up fix you didn't anticipate). Mark skipped items
+`status: "cancelled"`.

@@ -2,6 +2,7 @@ import { CONFIG, applyProjectConfig } from './config.js';
 import { connect, onMessage, send, getNextJobs } from './ws-client.js';
 import { setPaused, setShuttingDown, processSingleJob, stopAllContainers, stopSingleJobContainer, getActiveJobCount, getMaxParallelJobs, isPaused, isShuttingDown } from './workflow.js';
 import { checkpointAllAgents, markJobAsStoppedByUser, setWssShuttingDown } from './wss.js';
+import { getJobStatus, getJobPlan, getJobUsage } from './job-status.js';
 import type { JobPayload } from './workflow.js';
 import type { ProjectConfig } from './config.js';
 
@@ -86,6 +87,22 @@ onMessage(async (data) => {
         markJobAsStoppedByUser(jobId);
         await stopSingleJobContainer(jobId);
         send({ type: 'job_update', jobId, status: 'STOPPED', timestamp: new Date().toISOString() });
+    }
+
+    if (type === 'get_job_state') {
+        const jobId = data.jobId as number;
+        const state = getJobStatus(jobId) ?? null;
+        const plan = getJobPlan(jobId) ?? null;
+        const usage = getJobUsage(jobId) ?? null;
+        send({ type: 'job_state', jobId, state, plan, usage });
+    }
+
+    if (type === 'get_job_agent_status') {
+        const jobId = data.jobId as number;
+        const state = getJobStatus(jobId) ?? null;
+        const plan = getJobPlan(jobId) ?? null;
+        const usage = getJobUsage(jobId) ?? null;
+        send({ type: 'job_agent_status', jobId, state, plan, usage });
     }
 });
 

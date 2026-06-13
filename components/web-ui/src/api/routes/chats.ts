@@ -13,9 +13,16 @@ import {
   getChatMessage,
   isUserAuthorizedForProject,
   updateChatSession,
+  deleteRequirementSectionsByChatId,
+  deleteRequirementOutlinesByChatId,
+  deletePlanDataByChatId,
+  getRequirementOutlines,
 } from '@/lib/db';
-import { transitionTo } from '@/lib/workflow';
+import { transitionTo, runWorkflow } from '@/lib/workflow';
 import { requireProjectAccess } from '../middleware/auth';
+import { serveRegistry } from '@/lib/opencode-serve-registry';
+import { wsManager } from '@/lib/websocket-manager';
+import { stageWsManager } from '@/lib/stage-ws-manager';
 
 export const chatsRouter = Router();
 
@@ -162,6 +169,43 @@ chatsRouter.post('/generateRequirement', requireProjectAccess, async (req, res) 
   res.json({ success: true });
 });
 
+chatsRouter.post('/:chatId/requirement/regenerate', requireProjectAccess, async (req, res) => {
+  const { chatId } = req.params;
+  const chat = getChatSession(Number(chatId));
+  if (!chat) {
+    res.status(404).json({ error: 'Chat not found' });
+    return;
+  }
+
+  const chatDir = getChatDir(Number(chatId), chat.project_id);
+  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
+  if (fs.existsSync(requirementPath)) {
+    try {
+      fs.unlinkSync(requirementPath);
+    } catch (err) {
+      console.error('Failed to delete REQUIREMENT.md:', err);
+    }
+  }
+
+  const planDir = path.join(chatDir, 'plan');
+  if (fs.existsSync(planDir)) {
+    try {
+      fs.rmSync(planDir, { recursive: true, force: true });
+    } catch (err) {
+      console.error('Failed to delete planDir:', err);
+    }
+  }
+
+  deleteRequirementSectionsByChatId(Number(chatId));
+  deleteRequirementOutlinesByChatId(Number(chatId));
+  deletePlanDataByChatId(Number(chatId));
+
+  updateChatSession(Number(chatId), { running: false });
+  transitionTo(Number(chatId), 'requirement', 'outline');
+
+  res.json({ success: true });
+});
+
 chatsRouter.post('/:chatId/requirement/retry', requireProjectAccess, (req, res) => {
   const { chatId } = req.params;
   const chat = getChatSession(Number(chatId));
@@ -181,20 +225,6 @@ chatsRouter.post('/:chatId/verify/retry', requireProjectAccess, (req, res) => {
   const chat = getChatSession(Number(chatId));
   if (!chat) {
     res.status(404).json({ error: 'Chat session not found' });
-    return;
-  }
-
-  updateChatSession(Number(chatId), { running: false });
-  transitionTo(Number(chatId), chat.stage, chat.sub_stage_pre_error);
-
-  res.json({ success: true });
-});
-
-chatsRouter.post('/:chatId/quick-story/retry', requireProjectAccess, (req, res) => {
-  const { chatId } = req.params;
-  const chat = getChatSession(Number(chatId));
-  if (!chat) {
-    res.status(404).json({ error: 'Chat not found' });
     return;
   }
 
@@ -244,22 +274,7 @@ chatsRouter.post('/generatePlan', requireProjectAccess, async (req, res) => {
     res.status(404).json({ error: 'Chat session not found' });
     return;
   }
-  transitionTo(Number(chatId), 'plan', 'epics');
-  res.json({ success: true });
-});
-
-chatsRouter.post('/generateQuickStory', requireProjectAccess, async (req, res) => {
-  const { chatId } = req.body as { chatId?: number };
-  if (!chatId) {
-    res.status(400).json({ error: 'chatId is required' });
-    return;
-  }
-  const chat = getChatSession(Number(chatId));
-  if (!chat) {
-    res.status(404).json({ error: 'Chat session not found' });
-    return;
-  }
-  transitionTo(Number(chatId), 'quick_story', 'generate');
+  transitionTo(Number(chatId), 'plan', '');
   res.json({ success: true });
 });
 
@@ -380,6 +395,55 @@ chatsRouter.post('/:chatId/upload-requirement', requireProjectAccess, async (req
 
     res.status(200).json({ success: true });
   });
+});
+
+chatsRouter.get('/:chatId/requirement/outlines', requireProjectAccess, (req, res) => {
+  const { chatId } = req.params;
+  try {
+    const outlines = getRequirementOutlines(Number(chatId));
+    res.json(outlines);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+chatsRouter.post('/:chatId/stop', requireProjectAccess, (req, res) => {
+  const chatId = Number(req.params.chatId);
+  const chat = getChatSession(chatId);
+  if (!chat) {
+    res.status(404).json({ error: 'Chat not found' });
+    return;
+  }
+
+  serveRegistry.shutdown(chatId);
+  updateChatSession(chatId, { running: 0 });
+
+  wsManager.broadcastToProject(chat.project_id, {
+    type: 'chat_updated',
+    chatId: chatId,
+    stage: chat.stage,
+    sub_stage: chat.sub_stage,
+    running: 0,
+  });
+
+  stageWsManager.broadcastToStage(chatId, chat.stage, {
+    type: 'running_status',
+    running: false,
+  });
+
+  res.json({ success: true });
+});
+
+chatsRouter.post('/:chatId/resume', requireProjectAccess, (req, res) => {
+  const chatId = Number(req.params.chatId);
+  const chat = getChatSession(chatId);
+  if (!chat) {
+    res.status(404).json({ error: 'Chat not found' });
+    return;
+  }
+
+  runWorkflow(chatId);
+  res.json({ success: true });
 });
 
 export default chatsRouter;

@@ -26,9 +26,9 @@ services:
       - ${OPENVELO_DATA_DIR:-./data}:/openvelo/data
       # Docker socket — allows web-ui to spawn orchestrator containers (DooD)
       - /var/run/docker.sock:/var/run/docker.sock
-      # OpenCode credentials from host — read/write (allows containers to access and store auth)
-      - ${HOME}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json:rw
-      - ${HOME}/.config/opencode:/root/.config/opencode:rw
+      # Kilo credentials from host — read/write (allows containers to access and store auth)
+      - ${HOME}/.local/share/kilo/auth.json:/root/.local/share/kilo/auth.json:rw
+      - ${HOME}/.config/kilo:/root/.config/kilo:rw
     environment:
       - NODE_ENV=production
       - PORT=3000

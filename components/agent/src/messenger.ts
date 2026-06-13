@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { CONFIG, applyHandshake, type HandshakeConfig } from './config.js';
+import { AgentStatus } from './agent-status.js';
 
 export class Messenger {
     private wss: WebSocketServer | null = null;
@@ -16,6 +17,7 @@ export class Messenger {
             this.wss.on('connection', (ws: WebSocket) => {
                 console.log('Orchestrator connected. Waiting for handshake...');
                 this.currentWs = ws;
+                AgentStatus.attach(ws);
                 
                 ws.on('message', (data: Buffer) => {
                     const payload = JSON.parse(data.toString()) as { type: string; config: HandshakeConfig };
@@ -85,19 +87,8 @@ export class Messenger {
         }
     }
 
-    public sendStage(stage: string, attempt?: number, maxRetries?: number) {
-        const payload = JSON.stringify({
-            job_id: CONFIG.JOB_ID,
-            type: 'stage',
-            stage,
-            attempt,
-            max_retries: maxRetries,
-            timestamp: new Date().toISOString()
-        });
-
-        if (this.currentWs && this.currentWs.readyState === WebSocket.OPEN) {
-            this.currentWs.send(payload);
-        }
+    public sendAgentStatus() {
+        AgentStatus.sendAgentStatus();
     }
 
     public sendFinish(status: 'success' | 'error', data: any = {}) {

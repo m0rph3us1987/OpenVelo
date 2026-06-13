@@ -29,8 +29,8 @@ RUN wget https://packages.microsoft.com/config/debian/12/packages-microsoft-prod
 # Set up work directory
 WORKDIR /app
 
-# Install AI CLI tools
-RUN npm install -g opencode-ai@1.14.25 \
+# Install AI CLI tools (provides `kilo acp` for the in-process bridge)
+RUN npm install -g @kilocode/cli \
  	&& npm install typescript
 
 # Set global Git configuration
@@ -49,7 +49,7 @@ RUN npx tsc
 
 # Create data directories
 RUN mkdir /repo /story && chmod 777 /repo /story /root
-RUN mkdir -p /root/.local/share/opencode /root/.config/opencode
+RUN mkdir -p /root/.local/share/kilo /root/.config/kilo
 
 # Set Environment Variables
 ENV NODE_ENV=development

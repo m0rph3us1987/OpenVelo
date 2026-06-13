@@ -45,7 +45,7 @@ export function ChatList({ projectId, onChatSelect, onChatDataUpdated, selectedC
     if (selectedChatId) {
       const current = chats.find(c => c.id === selectedChatId);
       if (current) {
-        const key = `${current.stage}:${current.sub_stage}:${current.error_type}`;
+        const key = `${current.stage}:${current.sub_stage}:${current.error_type}:${current.running}`;
         if (prevSelectedStr.current !== key) {
           prevSelectedStr.current = key;
           onChatDataUpdated?.(current);
@@ -73,11 +73,16 @@ export function ChatList({ projectId, onChatSelect, onChatDataUpdated, selectedC
   }, [projectId]);
 
   useChatListWebSocket(projectId, {
-    onChatUpdated: (chatId, stage, sub_stage, error_type) => {
+    onChatUpdated: (chatId, stage, sub_stage, error_type, running) => {
       setChats((prev) => {
-        return prev.map((chat) =>
-          chat.id === chatId ? { ...chat, stage, sub_stage, error_type } : chat
+        const next = prev.map((chat) =>
+          chat.id === chatId ? { ...chat, stage, sub_stage, error_type, running: running !== undefined ? running : chat.running } : chat
         );
+        const updated = next.find(c => c.id === chatId);
+        if (updated && chatId === selectedChatId) {
+          onChatSelect?.(updated);
+        }
+        return next;
       });
     },
     onChatCreated: (chat) => {

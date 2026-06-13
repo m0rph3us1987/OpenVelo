@@ -9,7 +9,6 @@ import { ChatDomain } from '@/components/plan/ChatDomain';
 import { ChatFinalAssessment } from '@/components/plan/ChatFinalAssessment';
 import { ChatRequirement } from '@/components/plan/ChatRequirement';
 import { ChatPlan } from '@/components/plan/ChatPlan';
-import { ChatUserstory } from '@/components/plan/ChatUserstory';
 import { ChatVerify } from '@/components/plan/ChatVerify';
 import { PlanHeader } from '@/components/plan/PlanHeader';
 import type { ChatSession, Project } from '@/lib/types';
@@ -32,7 +31,6 @@ const STAGE_COMPONENTS: Record<string, React.ComponentType<{ chat: ChatSession; 
   'domain': ChatDomain,
   'final_assessment': ChatFinalAssessment,
   'requirement': ChatRequirement,
-  'quick_story': ChatUserstory,
   'plan': ChatPlan,
   'verify': ChatVerify,
 };

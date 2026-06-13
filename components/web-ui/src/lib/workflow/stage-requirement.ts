@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { getChatSession, getProject, getChatDir, getChatMessages, getProjectModels, getRequirementOutlines, insertRequirementOutline, insertRequirementSection, getRequirementSections, deleteRequirementOutlinesByChatId, deleteRequirementSectionsByChatId } from '@/lib/db';
+import { getChatSession, getProject, getChatDir, getChatMessages, getProjectModels, getRequirementOutlines, insertRequirementOutline, insertRequirementSection, getRequirementSections, deleteRequirementOutlinesByChatId, deleteRequirementSectionsByChatId, updateRequirementOutlineStatus, updateRequirementOutlineLogs } from '@/lib/db';
 import { getSkillsDir } from '@/lib/skills';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { transitionTo } from './index';
@@ -151,6 +151,10 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
 
   await client.ensureStarted().catch((err) => {
     loggerService.appendVerbose(chatId, 'workflow:requirement', `Server start failed: ${err.message}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'requirement', 'error');
     return;
   });
@@ -228,35 +232,32 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
     stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'sections' });
   } catch (err) {
     loggerService.appendVerbose(chatId, 'workflow:requirement', `sendMessage failed: ${err}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'requirement', 'error');
   }
 }
 
-async function handleSections(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
-  deleteRequirementSectionsByChatId(chatId);
-
-  const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-
-  await client.ensureStarted().catch((err) => {
-    loggerService.appendVerbose(chatId, 'workflow:requirement', `Server start failed: ${err.message}`);
-    transitionTo(chatId, 'requirement', 'error');
-    return;
-  });
-
-  const models = getProjectModels(projectId);
-  const sessionId = await client.createSession();
-
-  const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
-  let repoContext = '';
-  if (fs.existsSync(repoContextPath)) {
-    repoContext = fs.readFileSync(repoContextPath, 'utf-8');
+async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+  const executing = new Set<Promise<void>>();
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item));
+    executing.add(p);
+    const clean = () => executing.delete(p);
+    p.then(clean, clean);
+    if (executing.size >= limit) {
+      await Promise.race(executing);
+    }
   }
+  await Promise.all(executing);
+}
 
-  const messages = getChatMessages(chatId);
+async function handleSections(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
+  loggerService.appendVerbose(chatId, 'workflow:requirement', `Stage 2: Requirement Section Generation`);
 
-  const chatQA = messages
-    .map(m => m.role === 'system' ? `Q: ${m.message}` : `A: ${m.message}`)
-    .join('\n');
+  deleteRequirementSectionsByChatId(chatId);
 
   const outlines = getRequirementOutlines(chatId);
   if (outlines.length === 0) {
@@ -265,119 +266,221 @@ async function handleSections(chatId: number, chatDir: string, repoDir: string, 
     return;
   }
 
+  // Reset status and logs in database
+  for (const outline of outlines) {
+    updateRequirementOutlineStatus(outline.id, 'pending');
+    updateRequirementOutlineLogs(outline.id, '');
+  }
+
+  const progressMsg = `Generating requirement sections in batches of max 4 parallel sub-agents...`;
   stageWsManager.broadcastToStage(chatId, 'requirement', {
     type: 'sub_stage',
     sub_stage: 'sections',
-    progress: `Generating section ${outlines[0].title} (1/${outlines.length})`
+    progress: progressMsg
   });
 
-  for (let i = 0; i < outlines.length; i++) {
-    const outline = outlines[i];
-    const existingSections = getRequirementSections(chatId);
-    const previousSections: string[] = [];
-    for (const o of outlines) {
-      if (o.id === outline.id) break;
-      const existing = existingSections.find(s => s.outline_id === o.id);
-      if (existing) {
-        previousSections.push(`Section ${o.section_index}: ${o.title}`);
+  const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
+  await client.ensureStarted().catch((err) => {
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `Server start failed: ${err.message}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
+    transitionTo(chatId, 'requirement', 'error');
+    return;
+  });
+
+  const models = getProjectModels(projectId);
+
+  const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
+  let repoContext = '';
+  if (fs.existsSync(repoContextPath)) {
+    repoContext = fs.readFileSync(repoContextPath, 'utf-8');
+  }
+
+  const messages = getChatMessages(chatId);
+  const chatQA = messages
+    .map(m => m.role === 'system' ? `Q: ${m.message}` : `A: ${m.message}`)
+    .join('\n');
+
+  const promptTemplate = fs.readFileSync(
+    path.join(process.cwd(), 'prompts', 'plan-requirement-section-runner.md'),
+    'utf-8'
+  );
+
+  const sectionsDir = path.join(chatDir, 'requirement-sections');
+  if (!fs.existsSync(sectionsDir)) {
+    fs.mkdirSync(sectionsDir, { recursive: true });
+  } else {
+    // Clean existing files if any
+    const files = fs.readdirSync(sectionsDir);
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(sectionsDir, file));
+      } catch (err) {
+        // ignore
       }
     }
-    const previousSectionsText = previousSections.length > 0
-      ? `The following sections have already been written:\n${previousSections.join('\n')}\n\nDo not repeat content from these sections.`
-      : '';
+  }
 
-    const promptTemplate = fs.readFileSync(
-      path.join(process.cwd(), 'prompts', 'plan-requirement-section.md'),
-      'utf-8'
-    );
-
-    const prompt = promptTemplate
-      .replace(/{CHAT_DIR}/g, chatDir)
-      .replace(/{REPO_DIR}/g, repoDir)
-      .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
-      .replace(/{REPO_CONTEXT}/g, repoContext)
-      .replace(/{CHAT_QA}/g, chatQA)
-      .replace(/{SECTION_INDEX}/g, String(outline.section_index))
-      .replace(/{SECTION_TITLE}/g, outline.title)
-      .replace(/{SECTION_SCOPE}/g, outline.scope)
-      .replace(/{PREVIOUS_SECTIONS}/g, previousSectionsText)
-      .replace(/{SKILLS_DIR}/g, getSkillsDir());
-
-    loggerService.appendVerbose(chatId, 'workflow:requirement', `Generating section ${outline.section_index}: ${outline.title}`);
-
-    try {
-      const result = await client.sendMessage(sessionId, prompt, models.requirement_model);
-
-      const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
-      const sectionContent = textPart?.text?.trim() ?? '';
-
-      if (!sectionContent) {
-        loggerService.appendVerbose(chatId, 'workflow:requirement', `Empty section content received for section ${outline.section_index}`);
-        transitionTo(chatId, 'requirement', 'error');
-        return;
-      }
-
-      insertRequirementSection({
-        chat_id: chatId,
-        outline_id: outline.id,
-        content: sectionContent,
+  try {
+    // Run outlines concurrently up to a limit of 4
+    await runWithLimit(4, outlines, async (outline) => {
+      updateRequirementOutlineStatus(outline.id, 'running');
+      stageWsManager.broadcastToStage(chatId, 'requirement', {
+        type: 'sub_stage',
+        sub_stage: 'sections',
+        progress: progressMsg
       });
 
-      loggerService.appendVerbose(chatId, 'workflow:requirement', `Section ${outline.section_index} generated`);
+      const sectionPrompt = promptTemplate
+        .replace(/{CHAT_DIR}/g, chatDir)
+        .replace(/{REPO_DIR}/g, repoDir)
+        .replace(/{REPO_CONTEXT}/g, repoContext)
+        .replace(/{CHAT_QA}/g, chatQA)
+        .replace(/{SKILLS_DIR}/g, getSkillsDir())
+        .replace(/{SECTION_INDEX}/g, String(outline.section_index))
+        .replace(/{SECTION_TITLE}/g, outline.title)
+        .replace(/{SECTION_SCOPE}/g, outline.scope);
 
-      if (i < outlines.length - 1) {
+      const sessionId = await client.createSession();
+
+      // Periodically reconstruct and save logs to the database while running
+      const interval = setInterval(async () => {
+        try {
+          const logs = await client.reconstructSessionLogs(sessionId);
+          updateRequirementOutlineLogs(outline.id, logs);
+          stageWsManager.broadcastToStage(chatId, 'requirement', {
+            type: 'sub_stage',
+            sub_stage: 'sections',
+            progress: progressMsg
+          });
+        } catch {
+          // ignore
+        }
+      }, 1000);
+
+      try {
+        await client.sendMessage(sessionId, sectionPrompt, models.requirement_model, true);
+        
+        clearInterval(interval);
+        const finalLogs = await client.reconstructSessionLogs(sessionId);
+        updateRequirementOutlineLogs(outline.id, finalLogs);
+
+        const sectionFile = path.join(sectionsDir, `section-${outline.section_index}.md`);
+        if (fs.existsSync(sectionFile)) {
+          updateRequirementOutlineStatus(outline.id, 'completed');
+        } else {
+          loggerService.appendVerbose(chatId, 'workflow:requirement', `Section file missing for index ${outline.section_index} after sub-agent run`);
+          updateRequirementOutlineStatus(outline.id, 'failed');
+          throw new Error(`Section file section-${outline.section_index}.md was not generated`);
+        }
+      } catch (err) {
+        clearInterval(interval);
+        updateRequirementOutlineStatus(outline.id, 'failed');
+        throw err;
+      } finally {
+        try {
+          await client.deleteSession(sessionId);
+        } catch {
+          // ignore
+        }
         stageWsManager.broadcastToStage(chatId, 'requirement', {
           type: 'sub_stage',
           sub_stage: 'sections',
-          progress: `Generating section ${outlines[i + 1].title} (${i + 2}/${outlines.length})`
+          progress: progressMsg
         });
       }
-    } catch (err) {
-      loggerService.appendVerbose(chatId, 'workflow:requirement', `sendMessage failed for section ${outline.section_index}: ${err}`);
-      transitionTo(chatId, 'requirement', 'error');
+    });
+
+    // Sync generated section files from disk to the database
+    const sectionContents: Array<{ outline: typeof outlines[number]; content: string }> = [];
+    for (const outline of outlines) {
+      const sectionFile = path.join(sectionsDir, `section-${outline.section_index}.md`);
+      if (fs.existsSync(sectionFile)) {
+        try {
+          const content = fs.readFileSync(sectionFile, 'utf-8');
+          insertRequirementSection({
+            chat_id: chatId,
+            outline_id: outline.id,
+            content: content,
+          });
+          sectionContents.push({ outline, content });
+        } catch (err) {
+          loggerService.appendVerbose(chatId, 'workflow:requirement', `Failed to read section file for index ${outline.section_index}: ${err}`);
+          transitionTo(chatId, 'requirement', 'error');
+          return;
+        }
+      } else {
+        loggerService.appendVerbose(chatId, 'workflow:requirement', `Section file missing for index ${outline.section_index}`);
+        transitionTo(chatId, 'requirement', 'error');
+        return;
+      }
+    }
+
+    // Combine section files into REQUIREMENT.md on the backend.
+    const combined = combineSectionMarkdowns(
+      outlines.map((o) => ({ index: o.section_index, title: o.title, content: sectionContents.find((s) => s.outline.id === o.id)?.content ?? '' })),
+    );
+    const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
+    fs.writeFileSync(requirementPath, combined, 'utf-8');
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `REQUIREMENT.md written (${combined.length} chars, ${outlines.length} sections combined)`);
+
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `All sections synced. REQUIREMENT.md verified. Requirement ready.`);
+    transitionTo(chatId, 'requirement', 'requirement');
+    stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'requirement', progress: `Requirement` });
+  } catch (err) {
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `Requirement sections orchestration failed: ${err}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
       return;
     }
+    transitionTo(chatId, 'requirement', 'error');
+  }
+}
+
+function normalizeHeadingSpacing(md: string): string {
+  // Fix common LLM mistake: `##Heading` -> `## Heading`
+  return md.replace(/^(#{1,6})([^\s#])/gm, '$1 $2');
+}
+
+/**
+ * Combine per-section markdown files into a single REQUIREMENT.md.
+ *
+ * Contract (set by plan-requirement-section-runner.md):
+ * - Each section-N.md starts with `## <Section Title>` on line 1.
+ * - Body is in natural-language prose, no SRS-…/NFR-…/AC-… numbering.
+ * - Each section's final sub-heading is `### Acceptance Criteria` with bullets.
+ *
+ * This combiner:
+ * - Prepends `# Requirements Document`.
+ * - Demotes each section's leading `##` so it becomes a top-level `##`
+ *   section under the document title.
+ * - Joins with blank lines and collapses runs of >2 newlines.
+ */
+function combineSectionMarkdowns(sections: Array<{ index: number; title: string; content: string }>): string {
+  const parts: string[] = ['# Requirements Document', ''];
+
+  for (const section of sections) {
+    if (!section.content) continue;
+
+    let body = normalizeHeadingSpacing(section.content).replace(/\r\n/g, '\n').trim();
+
+    // Demote the section's leading `## <Title>` (or any leading H1/H2) by one level
+    // so it nests under `# Requirements Document` as a top-level `##` section.
+    body = body.replace(/^(#{1,2})\s+(.+?)\s*$/m, (_, hashes: string, title: string) => {
+      return `## ${title.trim()}`;
+    });
+
+    parts.push(body, '');
   }
 
-  loggerService.appendVerbose(chatId, 'workflow:requirement', `All ${outlines.length} sections generated, transitioning to generate`);
-  transitionTo(chatId, 'requirement', 'generate');
-  stageWsManager.broadcastToStage(chatId, 'requirement', {
-    type: 'sub_stage',
-    sub_stage: 'generate'
-  });
+  return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
 async function handleGenerate(chatId: number, chatDir: string): Promise<void> {
-  loggerService.appendVerbose(chatId, 'workflow:requirement', `Generating final REQUIREMENT.md`);
-
-  const outlines = getRequirementOutlines(chatId);
-  const sections = getRequirementSections(chatId);
-
-  if (sections.length === 0) {
-    loggerService.appendVerbose(chatId, 'workflow:requirement', `No sections found`);
-    transitionTo(chatId, 'requirement', 'error');
-    return;
-  }
-
-  const outlineById = new Map(outlines.map(o => [o.id, o]));
-  const sectionsByOutlineId = new Map<number, string>();
-  for (const s of sections) {
-    sectionsByOutlineId.set(s.outline_id, s.content);
-  }
-
-  let markdown = `# ${outlineById.get(sections[0].outline_id)?.title || 'Requirements Document'}\n\n`;
-
-  for (const outline of outlines) {
-    const content = sectionsByOutlineId.get(outline.id);
-    if (content) {
-      markdown += content + '\n\n';
-    }
-  }
-
-  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
-  fs.writeFileSync(requirementPath, markdown, 'utf-8');
-
-  loggerService.appendVerbose(chatId, 'workflow:requirement', `REQUIREMENT.md generated successfully`);
+  loggerService.appendVerbose(chatId, 'workflow:requirement', `Legacy handleGenerate called, transitioning to requirement`);
   transitionTo(chatId, 'requirement', 'requirement');
   stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'requirement', progress: `Requirement` });
 }
+

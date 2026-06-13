@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { wsManager } from '@/lib/websocket-manager';
 import type { WsMessage } from '@/lib/types';
 
 interface UseWebSocketOptions {
@@ -68,7 +69,17 @@ export function useWebSocket({ projectId, enabled }: UseWebSocketOptions) {
     return () => {
       mountedRef.current = false;
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-      if (wsRef.current) wsRef.current.close();
+      const ws = wsRef.current;
+      if (ws) {
+        // Synchronously remove this socket from the manager so a subsequent
+        // effect run (e.g. React 19 StrictMode dev double-mount, or a re-render
+        // that recreates the connection) cannot broadcast to a stale socket.
+        wsManager.unregister(ws);
+        ws.onclose = null;
+        ws.onerror = null;
+        wsRef.current = null;
+        try { ws.close(); } catch { /* ignore */ }
+      }
     };
   }, [projectId, enabled]);
 

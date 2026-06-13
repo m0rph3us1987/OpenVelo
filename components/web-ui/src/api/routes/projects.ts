@@ -22,13 +22,15 @@ import {
   getAllModels,
   isUserAuthorizedForProject,
   getProjectsForUser,
-  getPlanStories,
+  getPlanJobs,
   getDb,
   updateJobStopped,
 } from '@/lib/db';
 import type { ProjectFormData, Project } from '@/lib/types';
 import { sendToOrchestrator, getOrchestrator, isOrchestratorConnected } from '@/lib/orch-registry';
 import { wsManager, WsKeys } from '@/lib/websocket-manager';
+import { requestJobState } from '@/lib/job-state';
+import { requestJobAgentStatus } from '@/lib/agent-status';
 import { requireProjectAccess } from '../middleware/auth';
 import bcrypt from 'bcryptjs';
 import path from 'path';
@@ -588,62 +590,27 @@ projectsRouter.post('/:id/create-jobs-from-stories', requireProjectAccess, (req,
       res.status(404).json({ error: 'Project not found' });
       return;
     }
-    const stories = getPlanStories(Number(chatId));
-    if (stories.length === 0) {
-      res.status(400).json({ error: 'No stories found for chatId', chatId });
+    const planJobs = getPlanJobs(Number(chatId));
+    if (planJobs.length === 0) {
+      res.status(400).json({ error: 'No planned jobs found for chatId', chatId });
       return;
     }
     const jobIds: number[] = [];
-    const storyTitleToJobId = new Map<string, number>();
 
-    const featuresOrder = Array.from(new Set(stories.map(s => s.feature_id)));
-    const storiesByFeature = new Map<number, typeof stories>();
-    for (const story of stories) {
-      if (!storiesByFeature.has(story.feature_id)) storiesByFeature.set(story.feature_id, []);
-      storiesByFeature.get(story.feature_id)!.push(story);
-    }
-
-    for (const story of stories) {
+    let prevJobId: number | null = null;
+    for (const planJob of planJobs) {
       const job = insertLocalJob(parseInt(id), {
-        title: story.title,
-        description: story.description,
-        acceptanceCriteria: story.acceptance_criteria,
+        title: planJob.title,
+        description: planJob.content || planJob.description || '',
+        dependsOn: prevJobId ? [String(prevJobId)] : []
       });
-      storyTitleToJobId.set(story.title, job.id);
       jobIds.push(job.id);
+      prevJobId = job.id;
     }
 
-    for (const story of stories) {
-      const jobId = storyTitleToJobId.get(story.title)!;
-      const dependsOn: string[] = (() => {
-        try { return JSON.parse(story.depends_on || '[]'); }
-        catch { return []; }
-      })();
-
-      // Enforce strictly sequential features by making this story depend on all stories from the previous feature
-      const featureIdx = featuresOrder.indexOf(story.feature_id);
-      if (featureIdx > 0) {
-        const prevFeatureId = featuresOrder[featureIdx - 1];
-        const prevFeatureStories = storiesByFeature.get(prevFeatureId)!;
-        for (const prevStory of prevFeatureStories) {
-          if (!dependsOn.includes(prevStory.title)) {
-            dependsOn.push(prevStory.title);
-          }
-        }
-      }
-
-      const resolvedDeps = dependsOn
-        .map((depTitle: string) => storyTitleToJobId.get(depTitle))
-        .filter((id: number | undefined): id is number => id !== undefined);
-      if (resolvedDeps.length > 0) {
-        const db = getDb();
-        db.prepare('UPDATE jobs SET depends_on = ? WHERE id = ?')
-          .run(JSON.stringify(resolvedDeps), jobId);
-      }
-    }
     res.json({ success: true, jobsCreated: jobIds.length, jobIds });
   } catch (err) {
-    console.error('create-jobs-from-stories error:', err);
+    console.error('create-jobs error:', err);
     res.status(500).json({ error: String(err) });
   }
 });
@@ -681,7 +648,6 @@ projectsRouter.patch('/:id/jobs/:jobId', requireProjectAccess, (req, res) => {
     const job = updateJob(parseInt(jobId), {
       title: body.title,
       description: body.description,
-      acceptance_criteria: body.acceptanceCriteria,
       depends_on: body.dependsOn ? JSON.stringify(body.dependsOn) : null,
     });
     if (!job) return res.status(404).json({ error: 'Job not found' });
@@ -816,5 +782,51 @@ projectsRouter.get('/:id/jobs/:jobId/container-logs', requireProjectAccess, asyn
     res.json({ logs: logString });
   } catch (err) {
     res.json({ logs: `Error fetching logs: ${String(err)}` });
+  }
+});
+
+projectsRouter.get('/:id/jobs/:jobId/state', requireProjectAccess, async (req, res) => {
+  const { id, jobId } = req.params;
+  const projectId = parseInt(id);
+  const jobIdNum = parseInt(jobId);
+
+  const orchWs = getOrchestrator(projectId);
+  if (!orchWs || (orchWs.readyState as number) !== 1 /* OPEN */) {
+    res.json({ state: null, plan: null, usage: null, reason: 'orchestrator_offline' });
+    return;
+  }
+
+  try {
+    const { state, plan, usage } = await requestJobState(orchWs, jobIdNum);
+    if (state === null) {
+      res.json({ state: null, plan: null, usage: null, reason: 'timeout' });
+    } else {
+      res.json({ state, plan, usage });
+    }
+  } catch (err) {
+    res.json({ state: null, plan: null, usage: null, reason: 'error', error: String(err) });
+  }
+});
+
+projectsRouter.get('/:id/jobs/:jobId/agent-status', requireProjectAccess, async (req, res) => {
+  const { id, jobId } = req.params;
+  const projectId = parseInt(id);
+  const jobIdNum = parseInt(jobId);
+
+  const orchWs = getOrchestrator(projectId);
+  if (!orchWs || (orchWs.readyState as number) !== 1 /* OPEN */) {
+    res.json({ state: null, plan: null, usage: null, reason: 'orchestrator_offline' });
+    return;
+  }
+
+  try {
+    const { state, plan, usage } = await requestJobAgentStatus(orchWs, jobIdNum);
+    if (state === null) {
+      res.json({ state: null, plan: null, usage: null, reason: 'timeout' });
+    } else {
+      res.json({ state, plan, usage });
+    }
+  } catch (err) {
+    res.json({ state: null, plan: null, usage: null, reason: 'error', error: String(err) });
   }
 });

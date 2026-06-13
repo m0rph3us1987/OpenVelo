@@ -1,115 +1,100 @@
 # Orchestrator Architecture
 
-The `orchestrator` is a Node.js/TypeScript daemon that manages Docker container lifecycles and functions as a secure, real-time message bridge between the Web UI and isolated Agent containers.
-
----
+The `orchestrator` is a Node.js/TypeScript daemon that manages agent Docker containers and functions as a real-time message bridge between the Web-UI and isolated Agent containers.
 
 ## 1. Directory Structure & Key Files
-- `src/`: TypeScript source code.
-  - `index.ts`: **Entry Point**. Connects to the Web UI websocket and configures a 1-second interval loop calling `pollForJobs()`. This checks active slots and requests pending tasks from the Web UI.
-  - `ws-client.ts`: **Upward WebSocket Manager**. Handles the outbound client socket dialing the Web UI Express server at `/api/orchestrator/ws`.
-    - Handles incoming type `configure`: maps project rules to local variables (`applyProjectConfig()`).
-    - Handles incoming type `job_list`: schedules jobs in `workflow.ts`.
-    - Handles control events: `pause` (gracefully stops all running containers), `resume` (unlocks polling), `shutdown` (checkpoints and terminates), and `stop_job` (stops a single job).
-  - `wss.ts`: **Downward WebSocket Client**. Despite its filename, it dials *into* the Agent's WebSocket server running inside the spawned container (`ws://<container_ip>:<dynamic_port>`).
-    - Transmits the initial `handshake` block.
-    - Aggregates logs and stage transitions (`sendStage`), formatting them and sending them to the Web UI via `ws-client.ts`.
-    - Implements an **inactivity watchdog**. If no logs are output by the agent for `agent_max_timeout` (default 30 mins), the watchdog halts execution, issues a `checkpoint` signal to commit progress, kills the container, and initiates a container-level retry.
-  - `docker.ts`: **Docker Engine Wrapper**. Employs `dockerode` to dynamically construct, network, start, and tear down Linux or Windows Agent containers.
-  - `workflow.ts`: **Local Scheduler**. Tracks active job queues. Contains `processSingleJob()` which handles environment mapping, container creation, and WebSocket downward handshaking.
+- `src/`:
+  - `index.ts` — Entry point. Connects to the Web-UI via `ws-client.ts:connect(projectId)`, registers a single `onMessage()` handler that **dispatches on the `type` field** (`configure` / `job_list` / `pause` / `resume` / `shutdown` / `stop_job` / `hello`), and runs a `setInterval(pollForJobs, 1000)` loop. Also installs `SIGTERM`/`SIGINT` handlers.
+  - `ws-client.ts` — **Upward WebSocket Client** to the Web-UI. Manages the outbound socket to `/api/orchestrator/ws?projectId=...` with exponential-backoff reconnect (`min(1000 * 2^n, 30_000)` ms). On `open` it sends `hello`. Exposes `send()`, `getNextJobs(count)`, and an `onMessage()` registry. **It does not interpret message types itself** — that happens in `index.ts`.
+  - `wss.ts` — **Downward WebSocket Manager to Agents**. Despite its filename, it dials *into* the agent's WebSocket server inside each spawned container. Retries up to 10× at 1 s, sends the initial `handshake`, forwards agent `log` / `stage` / `finish` to the Web-UI as `log` / `job_log_chunk` / `job_update`, and implements the inactivity watchdog (see §3).
+  - `docker.ts` — **Docker Engine Wrapper** for spawning **agent** containers. Uses `dockerode` on Linux and falls back to the `docker` CLI on Windows. Resolves the orchestrator's own Docker network and joins the agent to it. Auto-detects Linux vs Windows agent images for path resolution.
+  - `workflow.ts` — Per-job state machine. Holds `activeContainers` (jobId → containerId) and `jobsInProgress` (jobId set). `processSingleJob(job)` notifies the Web-UI, spawns the agent container, then awaits `connectToAgent()` which keeps the `activeContainers` entry populated for the full job lifetime.
+  - `config.ts` — Static `CONFIG` (env-var driven) + `generateFinalRepoURL()` + `applyProjectConfig()`.
 
----
+## 2. Communication Pipeline
 
-## 2. Job Dispatch & Communication Pipeline
-
-The Orchestrator operates as a middleware multiplexer utilizing two separate WebSockets (Upward to Web UI, Downward to Agent):
+The orchestrator uses two separate WebSockets. It is **pull-based on the upward side**: every 1 s it asks the Web-UI for `get_next_jobs` until it reaches `max_parallel_jobs`. The Web-UI's `job-scheduler.ts` `assign_job` push path is dual-mode/legacy; the active dispatch path is pull.
 
 ```
  ┌────────────────┐              ┌────────────────┐              ┌────────────────┐
  │     Web UI     │              │  Orchestrator  │              │     Agent      │
  │ (Express WSS)  │              │ (Host Service) │              │  (Container)   │
  └───────┬────────┘              └───────┬────────┘              └───────┬────────┘
-         │                               │                               │
-         │   WebSocket Connect (/ws)     │                               │
-         │◄──────────────────────────────┤                               │
-         │                               │                               │
-         │   REST / WebSocket Poll       │                               │
-         │◄──────────────────────────────┤                               │
-         │                               │                               │
-         │  assign_job (User Story payload)                              │
-         ├──────────────────────────────►│                               │
-         │                               │  docker run (Volume Mounts)   │
-         │                               ├──────────────────────────────►│
-         │                               │                               │
-         │                               │  WebSocket Connect (3001)     │
-         │                               ├──────────────────────────────►│
-         │                               │                               │
-         │                               │  handshake (Configs/Story)    │
-         │                               ├──────────────────────────────►│
-         │                               │                               │
-         │                               │◄──────────────────────────────┤
-         │                               │  log (real-time stream)       │
-         │  log (fan-out)                │                               │
-         │◄──────────────────────────────┼───────────────────────────────┤
-         │                               │                               │
-         │                               │◄──────────────────────────────┤
-         │                               │  stage ("testing", attempt 1) │
-         │  job_update (WS Stage update) │                               │
-         │◄──────────────────────────────┼───────────────────────────────┤
-         │                               │                               │
-         │                               │◄──────────────────────────────┤
-         │                               │  checkpoint_done / finish     │
-         │  job_completed                │                               │
-         │◄──────────────────────────────┼───────────────────────────────┤
-         │                               │  docker rm (Clean up)         │
-         │                               ├──────────────────────────────►│
+          │  hello                          │                               │
+          ├──────────────────────────────►│                               │
+          │  configure (project config)     │                               │
+          │◄──────────────────────────────┤                               │
+          │  ready                          │                               │
+          ├──────────────────────────────►│                               │
+          │  get_next_jobs (every 1 s)      │                               │
+          ├──────────────────────────────►│                               │
+          │  job_list                       │                               │
+          │◄──────────────────────────────┤                               │
+          │                                │  docker run                   │
+          │                                ├──────────────────────────────►│
+          │                                │  WS connect (retry x10)      │
+          │                                ├──────────────────────────────►│
+          │                                │  handshake (configs + story) │
+          │                                ├──────────────────────────────►│
+          │                                │◄──────────────────────────────┤
+          │  log / job_log_chunk           │  log (real-time stream)      │
+          │◄──────────────────────────────┼───────────────────────────────┤
+          │  job_update                    │  stage / finish              │
+          │◄──────────────────────────────┼───────────────────────────────┤
+          │                                │  docker rm (clean up)        │
+          │                                ├──────────────────────────────►│
 ```
 
----
+## 3. Container Configuration
 
-## 3. Container Configuration and Mount Bindings
-Agent containers are spawned in `docker.ts` via the Docker Engine API. The Orchestrator sets up the following system configurations:
+- **Network**: Resolves the orchestrator's own Docker network via `resolveNetworkMode()` (uses `HOSTNAME`, inspects self, reads `NetworkSettings.Networks[0]`) and joins the agent to **that same network**. The agent is then reachable at `ws://<container_name>:3001`. **Not** the host's host network.
+- **Port Mapping**: Dynamically finds a free host port via `net.createServer().listen(0, ...)` and binds it to port `3001` inside the agent container. In container mode, the orchestrator dials the agent by container name on the internal port.
+- **Volume Mounts** (only three — the repository is **not** mounted):
+  - `~/.local/share/kilo/auth.json` → `/root/.local/share/kilo/auth.json` (or `C:/Users/ContainerAdministrator/.local/share/kilo/auth.json` on Windows containers).
+  - `~/.config/kilo` → `/root/.config/kilo`.
+  - `OPENVELO_SKILLS_HOST_PATH` → `/SKILLS` (Windows: `C:/SKILLS`).
+- **Extra hosts**: `host.docker.internal:host-gateway` for non-Windows containers.
+- The agent `git clone`s the repository itself during `prepareRepository()` using the authenticated URL passed in `handshake`.
 
-- **Network Mode**: Maps the container to the orchestrator's host network if running in containerized mode (Docker-outside-of-Docker / DooD).
-- **Volume Mounts (Binds)**:
-  - Mounts `~/.local/share/opencode/auth.json` to `/root/.local/share/opencode/auth.json` inside the container to provide authenticated LLM access.
-  - Mounts a unique host data folder (`data/chats/{{CHAT_ID}}`) containing the cloned repository and user-uploaded verification files to `/repo` inside the container.
-- **Port Mapping**: Dynamically finds a free port on the host machine using `net.createServer()` and binds it to port `3001` inside the Agent container, exposing the agent's WebSocket endpoint to the Orchestrator.
+## 4. Inactivity Watchdog
 
----
+`wss.ts:resetInactivityTimer()` resets a `setTimeout(handleInactivityTimeout, CONFIG.AGENT_MAX_TIMEOUT)` on every received agent message. If the window expires:
 
-## 4. Repository URL Generation & Authentication (`src/config.ts`)
+1. Send `checkpoint` to the agent.
+2. Wait up to 60 s for `checkpoint_done`.
+3. Close the WS.
+4. Send `job_retry` to the Web-UI.
 
-The `generateFinalRepoURL()` function constructs authenticated git remote URLs based on the repository host type. This is critical for git operations (clone, ls-remote, push) across different git hosting providers.
+`checkpointAllAgents()` (used during `shutdown` and on SIGTERM/SIGINT) sends `checkpoint` to every active agent and waits 60 s for `checkpoint_done` per agent.
 
-### Host-Specific Authentication Schemes
+## 5. Repository URL Generation (`src/config.ts:generateFinalRepoURL`)
 
-| Host | Username | Password | Example URL |
-|------|----------|----------|-------------|
-| `bitbucket` | `x-token-auth` | PAT | `https://x-token-auth:<PAT>@bitbucket.org/workspace/repo` |
-| `github` | `token` | PAT | `https://token:<PAT>@github.com/owner/repo` |
-| `gitea` | `token` | PAT | `https://token:<PAT>@gitea.example.com/owner/repo` |
-| `azure-devops` | `token` | PAT | `https://token:<PAT>@dev.azure.com/org/project/_git/repo` |
+`generateFinalRepoURL(repoUrl: string, repoPat: string, repoHost: string): string` is **host-aware** (third argument required). Two patterns are emitted:
 
-### Function Signature
+| `repoHost` | Username | Password |
+|------------|----------|----------|
+| `bitbucket` | `x-token-auth` | PAT |
+| `github` / `gitea` / `azure-devops` / (default) | `token` | PAT |
 
+Returns the original URL unchanged if `repoPat` is empty or the URL is malformed. (The pre-kilo-migration two-arg overload has been removed; the web-ui's `generateFinalRepoURL` mirrors the same signature.)
+
+## 6. `applyProjectConfig()` (called on `configure` message)
+
+Copies the Web-UI's project config into the orchestrator's `CONFIG`:
 ```typescript
-export function generateFinalRepoURL(repoUrl: string, repoPat: string, repoHost: string): string
+CONFIG.REPO_URL          = generateFinalRepoURL(project.repo_url, project.repo_pat ?? '', project.repo_host);
+CONFIG.REPO_HOST         = project.repo_host || 'github';
+CONFIG.REPO_PAT          = project.repo_pat ?? '';
+CONFIG.BACKEND           = project.backend;
+CONFIG.BACKEND_MODEL     = project.execution_model ?? '';
+CONFIG.BACKEND_BLUEPRINT_MODEL    = project.blueprint_model ?? '';
+CONFIG.BACKEND_REVIEW_MODEL       = project.review_model ?? '';
+CONFIG.BACKEND_DOCUMENTATION_MODEL= project.documentation_model ?? '';
+// + DOCKER_IMAGE, BUILD_CMD, TEST_CMD, STAGING_BRANCH, POLL_INTERVAL,
+//   AGENT_MAX_TIMEOUT, MAX_PARALLEL_JOBS, MAX_RETRIES, AGENT_MAX_RETRIES,
+//   REMOVE_DELETED_CONTAINERS, PROJECT_ID
 ```
 
-- `repoUrl`: Original repository URL (e.g., `https://bitbucket.org/workspace/repo_slug`)
-- `repoPat`: Personal Access Token for authentication
-- `repoHost`: One of `bitbucket`, `github`, `gitea`, `azure-devops`
-- **Returns**: URL with embedded credentials, or original URL if PAT is empty/invalid
+## 7. SIGTERM/SIGINT
 
-### Project Configuration Application (`applyProjectConfig()`)
-
-When the orchestrator receives a `configure` payload via WebSocket, `applyProjectConfig()` calls `generateFinalRepoURL()` with the project's `repo_url`, `repo_pat`, and `repo_host` fields to construct the authenticated URL stored in `CONFIG.REPO_URL`.
-
-```typescript
-CONFIG.REPO_URL = generateFinalRepoURL(project.repo_url, project.repo_pat ?? '', project.repo_host);
-CONFIG.REPO_HOST = project.repo_host || 'github';
-CONFIG.REPO_PAT = project.repo_pat ?? '';
-```
-
-The authenticated URL is then used by the agent container for git operations against private repositories.
+`shutdown()` sets paused/shutting-down flags, calls `checkpointAllAgents()` to flush in-progress work, calls `stopAllContainers()`, and `process.exit(0)`. The Web-UI's `handleOrchestratorDeath()` detects the disconnect and resets RUNNING jobs to PENDING.

@@ -29,25 +29,91 @@ interface DomainData {
 export function ChatDomain({ chat, onHeaderInfo, viewOnly, overrideSubStage }: ChatDomainProps) {
   const { subStage: wsSubStage } = useStageWebSocket({ chatId: chat.id, stage: 'domain', enabled: !viewOnly });
   const subStage = viewOnly ? (overrideSubStage ?? 'quiz') : wsSubStage;
+  const [actionLoading, setActionLoading] = React.useState(false);
 
   React.useEffect(() => {
     const titleMap: Record<string, string> = {
       'plan': 'Planning domains...',
       'quiz': 'Quiz',
     };
-    const subtitle = titleMap[subStage] ?? 'Planning domains...';
+    let subtitle = titleMap[subStage] ?? 'Planning domains...';
+
+    let showSpinner = subStage === 'plan';
+    if (chat.running === 0) {
+      subtitle = 'Stopped';
+      showSpinner = false;
+    }
 
     onHeaderInfo?.({
       title: `${chat.name} - ${subtitle}`,
-      showSpinner: subStage === 'plan',
+      showSpinner,
     });
-  }, [chat.id, subStage, chat.name, onHeaderInfo]);
+  }, [chat.id, subStage, chat.name, onHeaderInfo, chat.running]);
+
+  const handleStop = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/stop`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to stop:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/resume`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to resume:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const renderStopResumeOverlay = () => {
+    if (viewOnly) return null;
+    const isGenerating = subStage === 'plan';
+    if (!isGenerating && chat.running !== 0) return null;
+
+    return (
+      <div className="absolute top-4 right-4 z-50">
+        {chat.running === 1 ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleStop}
+            disabled={actionLoading}
+            className="shadow-md"
+          >
+            Stop
+          </Button>
+        ) : (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={handleResume}
+            disabled={actionLoading}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md"
+          >
+            Resume
+          </Button>
+        )}
+      </div>
+    );
+  };
 
   if (subStage === 'quiz') {
     return <QuizView chat={chat} viewOnly={viewOnly} />;
   }
 
-  return <TextLog key={chat.id} chatId={chat.id} />;
+  return (
+    <div className="relative w-full h-full">
+      {renderStopResumeOverlay()}
+      <TextLog key={chat.id} chatId={chat.id} />
+    </div>
+  );
 }
 
 interface ChatDomainProps {

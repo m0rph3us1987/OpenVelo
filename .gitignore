@@ -8,6 +8,7 @@
 node_modules/
 .pnp
 .pnp.js
+.kilo/
 
 # Root-level lockfile is not needed (components have their own lockfiles)
 /package-lock.json

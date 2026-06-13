@@ -1,4 +1,4 @@
-import { getProject, getRunningJobsByProject, getPendingJobsByProject, setJobStarted } from './db';
+import { getProject, getRunningJobsByProject, getPendingJobsByProject, setJobStarted, getJobsByProject } from './db';
 import { sendToOrchestrator, isOrchestratorConnected } from './orch-registry';
 import type { Job } from './types';
 
@@ -27,6 +27,7 @@ async function _scheduleJobs(projectId: number): Promise<void> {
     if (runningCount >= maxParallel) return;
 
     const pendingJobs = getPendingJobsByProject(projectId);
+    const allJobs = getJobsByProject(projectId);
 
     for (const job of pendingJobs) {
         if (runningCount >= maxParallel) break;
@@ -42,8 +43,6 @@ async function _scheduleJobs(projectId: number): Promise<void> {
 
             let blocked = false;
             for (const predId of predecessorIds) {
-                const { getJobsByProject } = await import('./db');
-                const allJobs = getJobsByProject(projectId);
                 const predJob = allJobs.find((j: Job) => String(j.id) === predId);
                 if (!predJob || predJob.status !== 'COMPLETED') {
                     blocked = true;
@@ -59,7 +58,6 @@ async function _scheduleJobs(projectId: number): Promise<void> {
                 id: job.id,
                 title: job.title,
                 description: job.description,
-                acceptance_criteria: job.acceptance_criteria,
                 retry_count: (job as unknown as { retry_count?: number }).retry_count ?? 0,
             },
         });

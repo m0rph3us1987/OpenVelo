@@ -2,6 +2,15 @@ import { WebSocket } from 'ws';
 import { CONFIG } from './config.js';
 import { dockerManager } from './docker.js';
 import { send } from './ws-client.js';
+import {
+    initJobStatus,
+    updateJobStatusStage,
+    incrementJobStatusRetry,
+    setJobPlan,
+    updateJobUsage,
+    type PlanEntry,
+    type UsageSnapshot,
+} from './job-status.js';
 
 const activeAgents = new Map<number, WebSocket>();
 const stoppedJobs = new Set<number>();
@@ -50,6 +59,7 @@ export async function checkpointAllAgents(): Promise<void> {
 
 export async function connectToAgent(jobId: number, containerId: string, host: string, port: number, jobTitle: string = '', story?: string): Promise<void> {
     const url = `ws://${host}:${port}`;
+    initJobStatus(jobId, new Date().toISOString(), CONFIG.MAX_RETRIES + 1);
     let retries = 0;
     const maxRetries = 10;
     const delay = 1000;
@@ -78,6 +88,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                         staging_branch: CONFIG.STAGING_BRANCH,
                         job_title: jobTitle,
                         story,
+                        agent_max_timeout: CONFIG.AGENT_MAX_TIMEOUT,
                     }
                 }));
                 resolve(ws);
@@ -135,6 +146,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
 
         ws.close();
         // Tell web-ui to retry this job
+        incrementJobStatusRetry(jobId);
         send({ type: 'job_retry', jobId });
     };
 
@@ -165,7 +177,10 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                     dockerManager.removeAgent(containerId);
                 }
             } else if (!wssShuttingDown) {
-                dockerManager.stopAgent(containerId);
+                // Leave the failed-attempt container running/present so the
+                // user can inspect it with `docker ps -a` / `docker logs` /
+                // `docker exec`. Only the next-attempt `job_retry` is sent.
+                incrementJobStatusRetry(jobId);
                 send({ type: 'job_retry', jobId });
             }
 
@@ -194,9 +209,62 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                 }
             }
 
+            if (payload.type === 'plan') {
+                resetInactivityTimer();
+                const entries = (payload.entries as PlanEntry[] | undefined) ?? [];
+                setJobPlan(jobId, entries);
+                send({
+                    type: 'job_plan_update',
+                    jobId,
+                    entries,
+                    timestamp: new Date().toISOString(),
+                });
+            }
+
+            if (payload.type === 'usage') {
+                resetInactivityTimer();
+                const usage = (payload.usage as Partial<UsageSnapshot> | undefined) ?? {};
+                const snapshot = updateJobUsage(jobId, usage);
+                send({
+                    type: 'job_usage_update',
+                    jobId,
+                    totalTokens: snapshot.totalTokens,
+                    inputTokens: snapshot.inputTokens,
+                    outputTokens: snapshot.outputTokens,
+                    cachedReadTokens: snapshot.cachedReadTokens,
+                    cachedWriteTokens: snapshot.cachedWriteTokens,
+                    cost: snapshot.cost,
+                    timestamp: new Date().toISOString(),
+                });
+            }
+
+            if (payload.type === 'context') {
+                resetInactivityTimer();
+                const patch: Partial<UsageSnapshot> = {};
+                if (typeof payload.used === 'number') patch.used = payload.used;
+                if (typeof payload.size === 'number') patch.size = payload.size;
+                const cost = payload.cost as { amount: number; currency: string } | undefined;
+                if (cost && typeof cost === 'object') patch.cost = cost;
+                const snapshot = updateJobUsage(jobId, patch);
+                send({
+                    type: 'job_usage_update',
+                    jobId,
+                    used: snapshot.used,
+                    size: snapshot.size,
+                    cost: snapshot.cost,
+                    timestamp: new Date().toISOString(),
+                });
+            }
+
             if (payload.type === 'stage') {
                 resetInactivityTimer();
                 console.log(`[JOB ${jobId}] [STAGE] ${payload.stage}`);
+                const jobStatus = updateJobStatusStage(
+                    jobId,
+                    payload.stage as string,
+                    payload.attempt as number,
+                    payload.max_retries as number
+                );
                 send({
                     type: 'job_update',
                     jobId,
@@ -204,6 +272,9 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                     stage: payload.stage,
                     agentAttempt: payload.attempt,
                     agentMaxRetries: payload.max_retries,
+                    startDateTime: jobStatus?.startDateTime,
+                    attempt: jobStatus?.attempt,
+                    maxAttempts: jobStatus?.maxAttempts,
                     timestamp: new Date().toISOString(),
                 });
             }
@@ -223,6 +294,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                         timestamp: new Date().toISOString(),
                     });
                     if (!payload.maxRetriesReached) {
+                        incrementJobStatusRetry(jobId);
                         send({ type: 'job_retry', jobId });
                     } else {
                         console.log(`Job ${jobId} reached max retries, not retrying.`);

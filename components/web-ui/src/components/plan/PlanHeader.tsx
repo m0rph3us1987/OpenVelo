@@ -34,7 +34,7 @@ const QUICK_STEPS: StageStep[] = [
   { label: 'Quiz', stage: 'domain', subStage: 'quiz', clickable: true },
   { label: 'Final Assessment', stage: 'final_assessment', clickable: true },
   { label: 'Requirement', stage: 'requirement', clickable: true },
-  { label: 'Story', stage: 'quick_story', clickable: true },
+  { label: 'Job', stage: 'plan', clickable: true },
 ];
 
 const VERIFY_STEPS: StageStep[] = [
@@ -105,17 +105,12 @@ export function PlanHeader({ title, showSpinner, chatSession, onStageClick, view
             const isActive = !allDone && i === activeIndex;
             const isClickableDone = isDone && step.clickable && onStageClick;
             const isClickableActive = isActive && viewingStage && onStageClick;
-            const isBeingViewed = viewingStage === step.stage || 
-              (chatSession?.mode === 'quick' && step.stage === 'quick_story' && viewingStage === 'plan');
+            const isBeingViewed = viewingStage === step.stage;
 
             const handleClick = () => {
               if (isClickableDone) {
-                let targetStage = step.stage;
-                let targetSubStage = step.subStage ?? '';
-                if (chatSession?.mode === 'quick' && step.stage === 'quick_story' && allDone) {
-                  targetStage = 'plan';
-                  targetSubStage = 'plan';
-                }
+                const targetStage = step.stage;
+                const targetSubStage = step.subStage ?? '';
                 onStageClick(targetStage, targetSubStage);
               } else if (isClickableActive) {
                 onStageClick('', '');

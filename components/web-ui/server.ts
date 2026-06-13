@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'http';
 import path from 'path';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import express from 'express';
@@ -38,10 +39,13 @@ import {
     getChatSession,
     getNextRunnableJobs,
     setJobsRunning,
+    refreshModels,
 } from './src/lib/db';
 import { verifyJwt } from './src/lib/auth';
 import { getSessionSecret } from './src/lib/session';
-import type { User } from './src/lib/types';
+import type { User, JobStatus } from './src/lib/types';
+import { resolvePendingStateRequest } from './src/lib/job-state';
+import { resolvePendingAgentStatusRequest } from './src/lib/agent-status';
 
 function parseSqliteDate(dateStr: string | null | undefined): Date | null {
     if (!dateStr) return null;
@@ -234,6 +238,15 @@ server.on('upgrade', async (req, socket, head) => {
 
 server.listen(port, '0.0.0.0', () => {
     console.log(`> OpenVelo web-ui ready on http://0.0.0.0:${port}`);
+    // Refresh models once on startup
+    try {
+        console.log('[startup] Refreshing available models...');
+        const output = execSync('kilo models', { encoding: 'utf-8', timeout: 30000 });
+        refreshModels(output);
+        console.log('[startup] Models refreshed successfully.');
+    } catch (err) {
+        console.error('[startup] Failed to refresh models on startup:', err);
+    }
 });
 
 // Graceful shutdown — stop accepting new connections and exit cleanly on Ctrl+C
@@ -393,9 +406,16 @@ function handleOrchestratorConnection(ws: WebSocket, query: Record<string, strin
                 const startedAt = d ? d.getTime() : Date.now();
                 const runtimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
                 updateJobStopped(jobId, runtimeSeconds);
+                // User-initiated stop: clear container_id so the modal no
+                // longer points at a container the orchestrator has torn down.
+                updateJobContainerId(jobId, null);
             } else if (status === 'PENDING') {
                 setJobStatus(jobId, 'PENDING');
-                updateJobContainerId(jobId, null);
+                // Don't clear container_id on retry-driven PENDING: the
+                // previous (failed) attempt's container is retained on the
+                // Docker host and we want the modal to still link to its
+                // logs. The container_id will be overwritten by the next
+                // attempt's RUNNING update.
             }
 
             wsManager.broadcast(WsKeys.projectKey(projectId), { ...data, type: 'job_update' });
@@ -444,6 +464,34 @@ function handleOrchestratorConnection(ws: WebSocket, query: Record<string, strin
                 logType,
                 timestamp: new Date().toISOString()
             });
+        }
+
+        if (type === 'job_state') {
+            const jobId = data.jobId as number;
+            const state = (data.state as JobStatus | null) ?? null;
+            const plan = (data.plan as JobStatus['plan'] | null) ?? null;
+            const usage = (data.usage as JobStatus['usage'] | null) ?? null;
+            if (state) {
+                if (plan) state.plan = plan;
+                if (usage) state.usage = usage;
+            }
+            resolvePendingStateRequest(jobId, state, plan, usage);
+        }
+
+        if (type === 'job_agent_status') {
+            const jobId = data.jobId as number;
+            const state = (data.state as JobStatus | null) ?? null;
+            const plan = (data.plan as JobStatus['plan'] | null) ?? null;
+            const usage = (data.usage as JobStatus['usage'] | null) ?? null;
+            resolvePendingAgentStatusRequest(jobId, state, plan, usage);
+        }
+
+        if (type === 'job_plan_update') {
+            wsManager.broadcast(WsKeys.projectKey(projectId), data);
+        }
+
+        if (type === 'job_usage_update') {
+            wsManager.broadcast(WsKeys.projectKey(projectId), data);
         }
 
         if (type === 'goodbye') {

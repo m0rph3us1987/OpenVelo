@@ -2,8 +2,10 @@ import * as React from 'react';
 import type { ChatSession } from '@/lib/types';
 import { useStageWebSocket } from '@/hooks/useStageWebSocket';
 import { TextLog } from '@/components/ui/text-log';
+import { ParallelLogViewer } from './ParallelLogViewer';
 import { Button } from '@/components/ui/button';
-import { Check, ChevronRight, X, Plus, AlertCircle } from 'lucide-react';
+import { Check, ChevronRight, AlertCircle, Play, Settings } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 interface ChatPlanProps {
   chat: ChatSession;
@@ -15,14 +17,13 @@ interface ChatPlanProps {
 export function ChatPlan({ chat, onHeaderInfo, viewOnly, overrideSubStage }: ChatPlanProps) {
   const { subStage: wsSubStage, progress } = useStageWebSocket({ chatId: chat.id, stage: 'plan', enabled: !viewOnly });
   const subStage = viewOnly ? (overrideSubStage ?? 'plan') : wsSubStage;
+  const [actionLoading, setActionLoading] = React.useState(false);
 
   React.useEffect(() => {
     const titleMap: Record<string, string> = {
-      'epics': 'Generating epics...',
-      'features': 'Generating features...',
-      'stories': 'Generating stories...',
-      'dependencies': 'Resolving dependencies...',
-      'plan': 'Plan',
+      'discovery': 'Discovering jobs...',
+      'generation': 'Generating job specifications...',
+      'plan': 'Plan ready',
       'error': 'Error',
     };
     let subtitle = titleMap[subStage] ?? 'Plan';
@@ -31,14 +32,88 @@ export function ChatPlan({ chat, onHeaderInfo, viewOnly, overrideSubStage }: Cha
       subtitle = progress;
     }
 
+    let showSpinner = ['discovery', 'generation'].includes(subStage);
+    if (chat.running === 0) {
+      subtitle = 'Stopped';
+      showSpinner = false;
+    }
+
     onHeaderInfo?.({
       title: `${chat.name} - ${subtitle}`,
-      showSpinner: ['epics', 'features', 'stories', 'dependencies'].includes(subStage),
+      showSpinner,
     });
-  }, [chat.id, subStage, progress, chat.name, onHeaderInfo]);
+  }, [chat.id, subStage, progress, chat.name, onHeaderInfo, chat.running]);
 
-  if (subStage === 'epics' || subStage === 'features' || subStage === 'stories' || subStage === 'dependencies') {
-    return <TextLog key={chat.id} chatId={chat.id} />;
+  const handleStop = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/stop`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to stop:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/resume`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to resume:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const renderStopResumeOverlay = () => {
+    if (viewOnly) return null;
+    const isGenerating = ['discovery', 'generation'].includes(subStage);
+    if (!isGenerating && chat.running !== 0) return null;
+
+    return (
+      <div className="absolute top-4 right-4 z-50">
+        {chat.running === 1 ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleStop}
+            disabled={actionLoading}
+            className="shadow-md"
+          >
+            Stop
+          </Button>
+        ) : (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={handleResume}
+            disabled={actionLoading}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md"
+          >
+            Resume
+          </Button>
+        )}
+      </div>
+    );
+  };
+
+  if (subStage === 'discovery') {
+    return (
+      <div className="relative w-full h-full">
+        {renderStopResumeOverlay()}
+        <TextLog key={chat.id} chatId={chat.id} />
+      </div>
+    );
+  }
+
+  if (subStage === 'generation') {
+    return (
+      <div className="relative w-full h-full">
+        {renderStopResumeOverlay()}
+        <ParallelLogViewer chatId={chat.id} type="plan" />
+      </div>
+    );
   }
 
   if (subStage === 'error') {
@@ -47,6 +122,7 @@ export function ChatPlan({ chat, onHeaderInfo, viewOnly, overrideSubStage }: Cha
     };
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+        <AlertCircle className="h-10 w-10 text-destructive" />
         <span>Error generating plan</span>
         <Button onClick={handleRetry} variant="outline">Retry</Button>
       </div>
@@ -56,45 +132,27 @@ export function ChatPlan({ chat, onHeaderInfo, viewOnly, overrideSubStage }: Cha
   return <PlanView chat={chat} viewOnly={viewOnly} />;
 }
 
-interface Epic {
+interface PlanJob {
   id: number;
-  epic_index: number;
+  job_index: number;
   title: string;
   description: string;
-  build_cmd: string | null;
-  test_cmd: string | null;
-}
-
-interface Feature {
-  id: number;
-  epic_id: number;
-  feature_index: number;
-  title: string;
-  description: string;
-}
-
-interface Story {
-  id: number;
-  feature_id: number;
-  story_index: number;
-  title: string;
-  description: string;
-  acceptance_criteria: string | null;
-  depends_on: string;
+  requirement_line_mapping: string;
+  content: string | null;
+  build_cmd: string;
+  test_cmd: string;
 }
 
 function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean }) {
-  const [epics, setEpics] = React.useState<Epic[]>([]);
-  const [features, setFeatures] = React.useState<Feature[]>([]);
-  const [stories, setStories] = React.useState<Story[]>([]);
+  const [jobs, setJobs] = React.useState<PlanJob[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [buildCmd, setBuildCmd] = React.useState('');
   const [testCmd, setTestCmd] = React.useState('');
   const [saving, setSaving] = React.useState(false);
   const [saved, setSaved] = React.useState(false);
-  const [expandedEpics, setExpandedEpics] = React.useState<Set<number>>(new Set());
-  const [expandedFeatures, setExpandedFeatures] = React.useState<Set<number>>(new Set());
+  const [expandedJobs, setExpandedJobs] = React.useState<Set<number>>(new Set());
   const [creatingJobs, setCreatingJobs] = React.useState(false);
+  const [showRegenConfirm, setShowRegenConfirm] = React.useState(false);
 
   React.useEffect(() => {
     fetchPlanData();
@@ -103,21 +161,15 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
 
   const fetchPlanData = async () => {
     try {
-      const epicsRes = await fetch(`/api/plan/epics?chatId=${chat.id}`);
-      const featuresRes = await fetch(`/api/plan/features?chatId=${chat.id}`);
-      const storiesRes = await fetch(`/api/plan/stories?chatId=${chat.id}`);
-
-      if (epicsRes.ok) {
-        const epicsData = await epicsRes.json();
-        setEpics(epicsData);
-        setExpandedEpics(new Set(epicsData.map((e: Epic) => e.id)));
+      const res = await fetch(`/api/plan/jobs?chatId=${chat.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setJobs(data);
+        // Expand first job by default
+        if (data.length > 0) {
+          setExpandedJobs(new Set([data[0].id]));
+        }
       }
-      if (featuresRes.ok) {
-        const featuresData = await featuresRes.json();
-        setFeatures(featuresData);
-        setExpandedFeatures(new Set(featuresData.map((f: Feature) => f.id)));
-      }
-      if (storiesRes.ok) setStories(await storiesRes.json());
     } catch (err) {
       console.error('Failed to fetch plan data:', err);
     } finally {
@@ -138,16 +190,14 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
     }
   };
 
-  const handleSaveBuildTest = async (fromEpic?: Epic) => {
+  const handleSaveBuildTest = async () => {
     if (saving || saved) return;
     setSaving(true);
     try {
-      const buildToSave = fromEpic?.build_cmd ?? buildCmd;
-      const testToSave = fromEpic?.test_cmd ?? testCmd;
       await fetch(`/api/projects/${chat.project_id}/updateBuildTest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ build_cmd: buildToSave, test_cmd: testToSave }),
+        body: JSON.stringify({ build_cmd: buildCmd, test_cmd: testCmd }),
       });
       setSaved(true);
     } catch (err) {
@@ -157,22 +207,26 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
     }
   };
 
-  const toggleEpic = (epicId: number) => {
-    setExpandedEpics(prev => {
+  const toggleJob = (jobId: number) => {
+    setExpandedJobs(prev => {
       const next = new Set(prev);
-      if (next.has(epicId)) next.delete(epicId);
-      else next.add(epicId);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
       return next;
     });
   };
 
-  const toggleFeature = (featureId: number) => {
-    setExpandedFeatures(prev => {
-      const next = new Set(prev);
-      if (next.has(featureId)) next.delete(featureId);
-      else next.add(featureId);
-      return next;
-    });
+  const handleRegeneratePlan = () => {
+    setShowRegenConfirm(true);
+  };
+
+  const confirmRegenerate = async () => {
+    setShowRegenConfirm(false);
+    try {
+      await fetch(`/api/plan/${chat.id}/regenerate`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to regenerate plan:', err);
+    }
   };
 
   const handleCreateJobs = async () => {
@@ -187,329 +241,139 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
         window.location.href = `/projects/${chat.project_id}`;
       }
     } catch (err) {
-      console.error('Failed to create jobs:', err);
+      console.error('Failed to create execution jobs:', err);
     } finally {
       setCreatingJobs(false);
     }
   };
 
-  const getStoriesForFeature = (featureId: number) => stories.filter(s => s.feature_id === featureId);
-  const getFeaturesForEpic = (epicId: number) => features.filter(f => f.epic_id === epicId);
-
-  const getFeaturesWithStories = (epicId: number) =>
-    getFeaturesForEpic(epicId).filter(f => getStoriesForFeature(f.id).length > 0);
-
-  const visibleEpics = epics.filter(epic => getFeaturesWithStories(epic.id).length > 0);
-
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Loading...
-      </div>
-    );
-  }
-
-  const toastEpic = epics.find(e => e.build_cmd || e.test_cmd);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        Loading...
+      <div className="flex items-center justify-center h-full text-muted-foreground bg-background">
+        Loading plan...
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-3 border-b border-border bg-muted/30">
+    <div className="flex flex-col h-full bg-background text-foreground">
+      {/* Header Controls */}
+      <div className="flex items-center justify-between p-4 border-b border-border bg-card/50">
         <div className="flex items-center gap-4">
-          {!viewOnly && toastEpic && (toastEpic.build_cmd || toastEpic.test_cmd) && (
-            <>
-              <AlertCircle className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                {toastEpic.build_cmd && <span>Build: <code className="bg-muted px-1 rounded">{toastEpic.build_cmd}</code></span>}
-                {toastEpic.test_cmd && <span>Test: <code className="bg-muted px-1 rounded">{toastEpic.test_cmd}</code></span>}
-              </div>
-              <Button variant="ghost" size="sm" className="h-7 px-2" disabled={saving || saved} onClick={() => handleSaveBuildTest(toastEpic)}>
-                {saving ? '...' : saved ? <Check className="h-4 w-4" /> : 'Use commands'}
-              </Button>
-            </>
-          )}
-        </div>
-        <Button variant="default" size="sm" onClick={handleCreateJobs} disabled={creatingJobs}>
-          {creatingJobs ? 'Creating...' : 'Create jobs'}
-        </Button>
-      </div>
-
-      <div className="flex-1 overflow-auto p-4">
-        <h3 className="text-lg font-semibold mb-4">Plan Tree View</h3>
-
-        <div className="space-y-2">
-          {visibleEpics.map(epic => (
-            <EpicCard
-              key={epic.id}
-              epic={epic}
-              features={getFeaturesWithStories(epic.id)}
-              allStories={stories}
-              expandedEpics={expandedEpics}
-              expandedFeatures={expandedFeatures}
-              toggleEpic={toggleEpic}
-              toggleFeature={toggleFeature}
-              viewOnly={viewOnly}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function EpicCard({
-  epic,
-  features,
-  allStories,
-  expandedEpics,
-  expandedFeatures,
-  toggleEpic,
-  toggleFeature,
-  viewOnly,
-}: {
-  epic: Epic;
-  features: Feature[];
-  allStories: Story[];
-  expandedEpics: Set<number>;
-  expandedFeatures: Set<number>;
-  toggleEpic: (id: number) => void;
-  toggleFeature: (id: number) => void;
-  viewOnly?: boolean;
-}) {
-  const isExpanded = expandedEpics.has(epic.id);
-
-  return (
-    <div className="border border-border rounded-lg overflow-hidden">
-      <button
-        className="w-full flex items-center gap-2 p-3 bg-muted hover:bg-muted/80 transition-colors text-left"
-        onClick={() => toggleEpic(epic.id)}
-      >
-        <ChevronRight className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-        <span className="font-medium">{epic.title}</span>
-        <span className="text-xs text-muted-foreground">({features.length} features)</span>
-      </button>
-
-      {isExpanded && (
-        <div className="p-3 space-y-2 bg-background">
-          {features.map(feature => (
-            <FeatureCard
-              key={feature.id}
-              feature={feature}
-              stories={allStories.filter(s => s.feature_id === feature.id)}
-              allStories={allStories}
-              expandedFeatures={expandedFeatures}
-              toggleFeature={toggleFeature}
-              viewOnly={viewOnly}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function FeatureCard({
-  feature,
-  stories,
-  allStories,
-  expandedFeatures,
-  toggleFeature,
-  viewOnly,
-}: {
-  feature: Feature;
-  stories: Story[];
-  allStories: Story[];
-  expandedFeatures: Set<number>;
-  toggleFeature: (id: number) => void;
-  viewOnly?: boolean;
-}) {
-  const isExpanded = expandedFeatures.has(feature.id);
-
-  return (
-    <div className="border border-border rounded-lg overflow-hidden">
-      <button
-        className="w-full flex items-center gap-2 p-2 bg-muted/50 hover:bg-muted/70 transition-colors text-left text-sm"
-        onClick={() => toggleFeature(feature.id)}
-      >
-        <ChevronRight className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-        <span className="font-medium">{feature.title}</span>
-        <span className="text-xs text-muted-foreground">({stories.length} stories)</span>
-      </button>
-
-      {isExpanded && (
-        <div className="p-2 space-y-2 bg-background">
-          {stories.map(story => (
-            <StoryCard key={story.id} story={story} allStories={allStories} viewOnly={viewOnly} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function StoryCard({
-  story,
-  allStories,
-  viewOnly,
-}: {
-  story: Story;
-  allStories: Story[];
-  viewOnly?: boolean;
-}) {
-  const [title, setTitle] = React.useState(story.title);
-  const [description, setDescription] = React.useState(story.description);
-  const [acceptanceCriteria, setAcceptanceCriteria] = React.useState(story.acceptance_criteria || '');
-  const [dependsOn, setDependsOn] = React.useState<string[]>(() => {
-    try {
-      return JSON.parse(story.depends_on || '[]');
-    } catch {
-      return [];
-    }
-  });
-  const [addingDep, setAddingDep] = React.useState(false);
-  const [selectedDep, setSelectedDep] = React.useState('');
-  const [saving, setSaving] = React.useState(false);
-
-  const saveStory = async (updates: { title?: string; description?: string; acceptance_criteria?: string; depends_on?: string }) => {
-    setSaving(true);
-    try {
-      await fetch(`/api/plan/stories/${story.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-    } catch (err) {
-      console.error('Failed to save story:', err);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleBlur = () => {
-    const updates: { title?: string; description?: string; acceptance_criteria?: string; depends_on?: string } = {};
-    if (title !== story.title) updates.title = title;
-    if (description !== story.description) updates.description = description;
-    if (acceptanceCriteria !== story.acceptance_criteria) updates.acceptance_criteria = acceptanceCriteria;
-    if (Object.keys(updates).length > 0) {
-      saveStory(updates);
-    }
-  };
-
-  const handleAddDep = () => {
-    if (!selectedDep) return;
-    const newDeps = [...dependsOn, selectedDep];
-    setDependsOn(newDeps);
-    saveStory({ depends_on: JSON.stringify(newDeps) });
-    setSelectedDep('');
-    setAddingDep(false);
-  };
-
-  const handleRemoveDep = (depId: string) => {
-    const newDeps = dependsOn.filter(d => d !== depId);
-    setDependsOn(newDeps);
-    saveStory({ depends_on: JSON.stringify(newDeps) });
-  };
-
-  const getAvailableDeps = () => {
-    return allStories.filter(s => {
-      if (s.id === story.id) return false;
-      if (dependsOn.includes(String(s.id))) return false;
-      const sDeps = typeof s.depends_on === 'string' ? JSON.parse(s.depends_on || '[]') : [];
-      if (sDeps.includes(String(story.id))) return false;
-      return true;
-    });
-  };
-
-  const availableForDep = getAvailableDeps();
-
-  return (
-    <div className="border border-border rounded p-2 bg-background">
-      {viewOnly ? (
-        <>
-          <span className="block w-full font-medium text-sm px-1">{title}</span>
-          <p className="w-full text-xs text-muted-foreground px-1 mt-1 whitespace-pre-wrap">{description}</p>
-          {acceptanceCriteria && (
-            <span className="block w-full text-xs px-1 mt-1">{acceptanceCriteria}</span>
-          )}
-        </>
-      ) : (
-        <>
-          <input
-            className="w-full font-medium text-sm bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-ring rounded px-1"
-            value={title}
-            onChange={e => setTitle(e.target.value)}
-            onBlur={handleBlur}
-          />
-          <textarea
-            className="w-full text-xs text-muted-foreground bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-ring rounded px-1 mt-1 resize-none"
-            value={description}
-            onChange={e => setDescription(e.target.value)}
-            onBlur={handleBlur}
-            rows={2}
-          />
-          <input
-            className="w-full text-xs bg-transparent border-none focus:outline-none focus:ring-1 focus:ring-ring rounded px-1 mt-1"
-            value={acceptanceCriteria}
-            onChange={e => setAcceptanceCriteria(e.target.value)}
-            onBlur={handleBlur}
-            placeholder="Acceptance criteria..."
-          />
-          {saving && <span className="text-xs text-muted-foreground">Saving...</span>}
-        </>
-      )}
-      {dependsOn.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
-          {dependsOn.map(depId => {
-            const depStory = allStories.find(s => String(s.id) === depId);
-            return (
-              <span key={depId} className="inline-flex items-center gap-1 text-xs bg-muted px-2 py-0.5 rounded">
-                {depStory?.title || depId}
-                {!viewOnly && (
-                  <button onClick={() => handleRemoveDep(depId)} className="hover:text-destructive">
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
+          <div className="flex items-center gap-3 text-xs text-muted-foreground bg-muted/40 px-3 py-1.5 rounded-lg border border-border">
+            <Settings className="h-3.5 w-3.5" />
+            {buildCmd && (
+              <span>
+                Build: <code className="bg-muted px-1 py-0.5 rounded font-mono text-[11px]">{buildCmd}</code>
               </span>
-            );
-          })}
+            )}
+            {testCmd && (
+              <span>
+                Test: <code className="bg-muted px-1 py-0.5 rounded font-mono text-[11px]">{testCmd}</code>
+              </span>
+            )}
+          </div>
         </div>
-      )}
-      {!viewOnly && (
-        <>
-          {dependsOn.length === 0 && (
-            <div className="flex flex-wrap gap-1 mt-2" />
-          )}
-          {addingDep ? (
-            <div className="flex items-center gap-2 mt-2">
-              <select
-                value={selectedDep}
-                onChange={e => setSelectedDep(e.target.value)}
-                className="flex-1 text-xs border rounded px-2 py-1"
-              >
-                <option value="">Select story...</option>
-                {availableForDep.map(s => (
-                  <option key={s.id} value={String(s.id)}>{s.title}</option>
-                ))}
-              </select>
-              <Button size="sm" variant="ghost" onClick={handleAddDep}>Add</Button>
-              <Button size="sm" variant="ghost" onClick={() => { setAddingDep(false); setSelectedDep(''); }}>Cancel</Button>
+        <div className="flex items-center gap-3">
+          <Button variant="outline" size="sm" className="hover:bg-destructive/10 hover:text-destructive border-border" onClick={handleRegeneratePlan}>
+            Regenerate
+          </Button>
+          <Button variant="default" size="sm" className="gap-2 bg-primary text-primary-foreground hover:bg-primary/95" onClick={handleCreateJobs} disabled={creatingJobs}>
+            <Play className="h-3.5 w-3.5 fill-current" />
+            {creatingJobs ? 'Creating...' : 'Create Jobs'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Main List */}
+      <div className="flex-1 overflow-auto p-6 space-y-4 max-w-4xl mx-auto w-full">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold tracking-tight">Functional Jobs</h2>
+          <span className="text-sm text-muted-foreground">{jobs.length} jobs planned</span>
+        </div>
+
+        <div className="space-y-3">
+          {jobs.map(job => (
+            <JobCard
+              key={job.id}
+              job={job}
+              isExpanded={expandedJobs.has(job.id)}
+              onToggle={() => toggleJob(job.id)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <Dialog open={showRegenConfirm} onOpenChange={setShowRegenConfirm}>
+        <DialogContent className="border border-border bg-card">
+          <DialogHeader>
+            <DialogTitle>Regenerate Plan</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to regenerate the plan from scratch? This will delete all discovered jobs and their specifications.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" className="border border-border" onClick={() => setShowRegenConfirm(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRegenerate}>
+              Regenerate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function JobCard({
+  job,
+  isExpanded,
+  onToggle
+}: {
+  job: PlanJob;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="border border-border rounded-xl bg-card overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+      <button
+        className="w-full flex items-center justify-between p-4 hover:bg-muted/30 transition-colors text-left"
+        onClick={onToggle}
+      >
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center h-7 w-7 rounded-lg bg-primary/10 text-primary font-bold text-xs border border-primary/20">
+            {job.job_index}
+          </div>
+          <div>
+            <h4 className="font-semibold text-sm leading-none mb-1.5">{job.title}</h4>
+            <p className="text-xs text-muted-foreground line-clamp-1">{job.description}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-muted border border-border text-muted-foreground">
+            {job.requirement_line_mapping}
+          </span>
+          <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`} />
+        </div>
+      </button>
+
+      {isExpanded && (
+        <div className="border-t border-border bg-muted/10 p-5">
+          <h5 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Specifications</h5>
+          {job.content ? (
+            <div className="prose prose-sm dark:prose-invert max-w-none">
+              <pre className="whitespace-pre-wrap font-sans text-sm text-foreground bg-muted/40 p-4 rounded-lg border border-border leading-relaxed">
+                {job.content}
+              </pre>
             </div>
           ) : (
-            <button
-              onClick={() => setAddingDep(true)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground mt-1"
-            >
-              <Plus className="h-3 w-3" /> Add dependency
-            </button>
+            <div className="flex items-center gap-2 text-sm text-muted-foreground italic">
+              <AlertCircle className="h-4 w-4 animate-pulse" />
+              Generating specifications...
+            </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

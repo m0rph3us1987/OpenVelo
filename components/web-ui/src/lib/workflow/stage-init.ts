@@ -50,22 +50,43 @@ export async function handleInit(chatId: number): Promise<void> {
   const dbPath = process.env.OPENVELO_DB_PATH;
   const whitelistedPaths: Record<string, string> = {
     '/openvelo/data/SKILLS': 'allow',
-    'C:\\openvelo\\data\\SKILLS': 'allow'
+    '/openvelo/data/SKILLS/**': 'allow',
+    'C:\\openvelo\\data\\SKILLS': 'allow',
+    'C:\\openvelo\\data\\SKILLS\\**': 'allow',
+    '/tmp': 'allow',
+    '/tmp/**': 'allow'
   };
 
   if (dbPath) {
     const resolvedSkills = path.join(path.dirname(dbPath), 'SKILLS');
     whitelistedPaths[resolvedSkills] = 'allow';
+    whitelistedPaths[`${resolvedSkills}/**`] = 'allow';
+    whitelistedPaths[`${resolvedSkills}\\**`] = 'allow';
   } else {
     const localSkills = path.resolve(process.cwd(), 'data', 'SKILLS');
     whitelistedPaths[localSkills] = 'allow';
+    whitelistedPaths[`${localSkills}/**`] = 'allow';
+    whitelistedPaths[`${localSkills}\\**`] = 'allow';
     const parentSkills = path.resolve(process.cwd(), '..', '..', 'data', 'SKILLS');
     whitelistedPaths[parentSkills] = 'allow';
+    whitelistedPaths[`${parentSkills}/**`] = 'allow';
+    whitelistedPaths[`${parentSkills}\\**`] = 'allow';
   }
 
   const opencodeConfigPath = path.join(chatDir, 'opencode.json');
   fs.writeFileSync(opencodeConfigPath, JSON.stringify({
     "$schema": "https://opencode.ai/config.json",
+    "permission": {
+      "*": "allow",
+      "ask_user": "deny",
+      "question": "deny",
+      "external_directory": whitelistedPaths
+    }
+  }, null, 2));
+
+  const kiloConfigPath = path.join(chatDir, 'kilo.json');
+  fs.writeFileSync(kiloConfigPath, JSON.stringify({
+    "$schema": "https://kilo.ai/config.json",
     "permission": {
       "*": "allow",
       "ask_user": "deny",

@@ -38,8 +38,8 @@ export interface Job {
   depends_on: string | null;
   title: string;
   description: string | null;
-  acceptance_criteria: string | null;
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STOPPED';
+  feature_id: number | null;
   container_id: string | null;
   branch: string | null;
   retry_count: number;
@@ -66,7 +66,63 @@ export interface WsJobUpdateMessage {
   stage?: string;
   agentAttempt?: number;
   agentMaxRetries?: number;
+  startDateTime?: string;
+  attempt?: number;
+  maxAttempts?: number;
   timestamp: string;
+}
+
+export type PlanEntryStatus = 'pending' | 'in_progress' | 'completed';
+export type PlanEntryPriority = 'high' | 'medium' | 'low';
+
+export interface JobStatusPlanEntry {
+  content: string;
+  status: PlanEntryStatus;
+  priority: PlanEntryPriority;
+}
+
+export interface JobStatusUsage {
+  used?: number;
+  size?: number;
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  cost?: { amount: number; currency: string };
+}
+
+export interface WsJobUsageUpdateMessage {
+  type: 'job_usage_update';
+  jobId: number;
+  used?: number;
+  size?: number;
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  cost?: { amount: number; currency: string };
+  timestamp: string;
+}
+
+export interface WsJobPlanUpdateMessage {
+  type: 'job_plan_update';
+  jobId: number;
+  entries: JobStatusPlanEntry[];
+  timestamp: string;
+}
+
+export interface JobStatus {
+  jobId: number;
+  startDateTime: string;
+  stage: string;
+  attempt: number;
+  maxAttempts: number;
+  agentAttempt?: number;
+  agentMaxRetries?: number;
+  usage?: JobStatusUsage;
+  plan?: JobStatusPlanEntry[];
 }
 
 interface WsConnectedMessage {
@@ -74,7 +130,12 @@ interface WsConnectedMessage {
   timestamp: string;
 }
 
-export type WsMessage = WsLogMessage | WsJobUpdateMessage | WsConnectedMessage;
+export type WsMessage =
+  | WsLogMessage
+  | WsJobUpdateMessage
+  | WsJobUsageUpdateMessage
+  | WsJobPlanUpdateMessage
+  | WsConnectedMessage;
 
 export interface ProjectModels {
   default_model: string;
@@ -188,6 +249,7 @@ export interface ChatSession {
   sub_stage: string;
   sub_stage_pre_error: string;
   error_type?: string | null;
+  running?: number;
   created_at: string;
   updated_at: string;
 }

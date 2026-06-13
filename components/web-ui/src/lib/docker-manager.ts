@@ -152,10 +152,10 @@ export const dockerManager = {
     if (tempDataHostPath) {
       binds.push(`${toDockerPath(tempDataHostPath)}:/openvelo/temp_data`);
     }
-    // OpenCode credentials from host — read/write (allows containers to access and store auth)
+    // Kilo credentials from host — read/write (allows containers to access and store auth)
     const homeDir = process.env.OPENVELO_HOST_HOME || process.env.HOME || (process.platform === 'win32' ? 'C:\\Users\\Administrator' : '/root');
-    binds.push(`${homeDir}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json:rw`);
-    binds.push(`${homeDir}/.config/opencode:/root/.config/opencode:rw`);
+    binds.push(`${homeDir}/.local/share/kilo/auth.json:/root/.local/share/kilo/auth.json:rw`);
+    binds.push(`${homeDir}/.config/kilo:/root/.config/kilo:rw`);
 
     const envList = Object.entries(env).map(([k, v]) => `${k}=${v}`);
     if (process.env.DOCKER_HOST) {
@@ -247,15 +247,15 @@ function spawnViaCli(
     args.push('-v', `${hostPath}:${tempDataTarget}`);
   }
 
-  // OpenCode credentials from host — read/write (allows containers to access and store auth)
+  // Kilo credentials from host — read/write (allows containers to access and store auth)
   if (process.platform === 'win32') {
     const userProfile = process.env.USERPROFILE || 'C:\\Users\\Administrator';
-    args.push('-v', `${userProfile}\\.local\\share\\opencode\\auth.json:C:\\Users\\ContainerAdministrator\\.local\\share\\opencode\\auth.json:rw`);
-    args.push('-v', `${userProfile}\\.config\\opencode:C:\\Users\\ContainerAdministrator\\.config\\opencode:rw`);
+    args.push('-v', `${userProfile}\\.local\\share\\kilo\\auth.json:C:\\Users\\ContainerAdministrator\\.local\\share\\kilo\\auth.json:rw`);
+    args.push('-v', `${userProfile}\\.config\\kilo:C:\\Users\\ContainerAdministrator\\.config\\kilo:rw`);
   } else {
     const homeDir = process.env.HOME || '/root';
-    args.push('-v', `${homeDir}/.local/share/opencode/auth.json:/root/.local/share/opencode/auth.json:rw`);
-    args.push('-v', `${homeDir}/.config/opencode:/root/.config/opencode:rw`);
+    args.push('-v', `${homeDir}/.local/share/kilo/auth.json:/root/.local/share/kilo/auth.json:rw`);
+    args.push('-v', `${homeDir}/.config/kilo:/root/.config/kilo:rw`);
   }
 
   // Override the in-container temp data path for the orchestrator

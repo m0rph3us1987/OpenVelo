@@ -25,7 +25,7 @@ REQUIREMENT FILE:
 
 ## ALL STORIES
 
-The following is a JSON array containing ALL user stories from the plan. Each story has a unique title — use these exact titles when specifying dependencies. The array index (0, 1, 2, …) is the authoritative execution order.
+The following is a JSON array containing ALL user stories from the plan. Each story has a unique `id` (an integer) — use these exact story `id`s when specifying dependencies. The array index (0, 1, 2, …) is the authoritative execution order.
 
 ```json
 {ALL_STORIES_JSON}
@@ -38,15 +38,16 @@ The following is a JSON array containing ALL user stories from the plan. Each st
 Analyze the stories and determine which stories **modify or touch the same artifacts/files**.
 
 ### STRICT EXECUTION RULES
-1. **Epics and Features are Sequential:** The system already executes Features and Epics strictly sequentially. Feature 2 will never run until Feature 1 is completely finished.
-2. **Stories are Parallel:** All User Stories within the **same Feature** will be executed in parallel by default to maximize build speed.
-3. **Artifact Conflicts:** The ONLY reason two stories within the same feature cannot run in parallel is if they touch/modify the exact same files or artifacts (e.g., both modify the same database schema file, or both edit the same component). If they do, they must run sequentially to avoid corrupting the files.
+1. **Features are Sequential:** All stories in the current feature must depend directly or transitively on the final story of the previous feature (provided at index 0, if applicable) to ensure sequential execution.
+2. **Stories are Parallel by Default:** Stories within the current feature will execute in parallel unless they modify the exact same files/artifacts.
+3. **Artifact Conflicts:** If two stories in the current feature touch/modify the exact same files, they must run sequentially.
 
-### YOUR JOB: INTRA-FEATURE CONFLICT DETECTION
-Your sole job is to identify file/artifact conflicts **between stories that belong to the SAME Feature**.
-- If two stories in the same feature modify the same file, the story with the **higher array index** must depend on the story with the **lower array index**.
-- **DO NOT** create dependencies between stories in different features (the system handles cross-feature dependencies automatically).
-- **DO NOT** create dependencies within the same feature unless they genuinely touch the same files. We want them to run in parallel if possible!
+### YOUR JOB: DEPENDENCY RESOLUTION
+Identify dependencies for the current feature's stories:
+- **Intra-Feature Conflicts:** If two stories in the current feature modify the exact same files, the story with the **higher array index** must depend on the story with the **lower array index**.
+- **Sequential Feature Ordering:** If a story in the current feature has no other dependencies within this feature, it MUST depend on the previous feature's final story (provided at index 0, if applicable).
+- **DO NOT** create any other cross-feature dependencies.
+- **DO NOT** create dependencies within the same feature unless they genuinely touch the same files.
 
 ### ABSOLUTE CONSTRAINT — POSITIONAL ORDERING
 Stories are indexed 0, 1, 2, … in the array above. A story at index `i` may ONLY depend on stories at index `j` where `j < i`. You MUST NEVER add a dependency that points forward or to itself. 
@@ -56,8 +57,8 @@ Stories are indexed 0, 1, 2, … in the array above. A story at index `i` may ON
 ## SELF-CHECK (mandatory before output)
 
 Before outputting, verify each story in your result:
-- Are the dependencies strictly between stories in the SAME feature?
-- Is there a genuine file/artifact conflict between them?
+- Are the dependencies strictly within the same feature, or pointing to the previous feature's final story at index 0?
+- If a story has no other dependencies, does it depend on the previous feature's final story at index 0 (if present)?
 - Does the dependency point from a higher index to a lower index?
 
 ---
@@ -68,12 +69,12 @@ You must write a **single JSON file** to `{CHAT_DIR}/plan/`.
 
 File name: `dependencies.json`
 
-The file must contain a single JSON object with the dependencies you found:
+The file must contain a single JSON object with the dependencies you found (use the numeric story `id` for `story_id` and the array of numeric IDs for `depends_on`):
 
 ```json
 {
   "dependencies": [
-    {"story_title": "Exact Story Title 2", "depends_on": ["Exact Story Title 1"], "reason": "Both modify the user_schema.sql file"}
+    {"story_id": 134, "depends_on": [118], "reason": "Both modify the user_schema.sql file"}
   ]
 }
 ```

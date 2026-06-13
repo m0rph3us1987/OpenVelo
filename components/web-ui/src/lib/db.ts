@@ -57,7 +57,7 @@ export function initDb(): void {
       repo_url TEXT NOT NULL DEFAULT '',
       repo_pat TEXT,
       docker_image TEXT NOT NULL DEFAULT 'openvelo-agent:linux',
-      backend TEXT NOT NULL DEFAULT 'opencode',
+      backend TEXT NOT NULL DEFAULT 'kilo',
       build_cmd TEXT,
       test_cmd TEXT,
       staging_branch TEXT NOT NULL DEFAULT 'staging',
@@ -78,8 +78,8 @@ export function initDb(): void {
       depends_on TEXT,
       title TEXT,
       description TEXT,
-      acceptance_criteria TEXT,
       status TEXT,
+      feature_id INTEGER REFERENCES plan_features(id),
       container_id TEXT,
       branch TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
@@ -220,6 +220,8 @@ export function initDb(): void {
       section_index INTEGER NOT NULL,
       title TEXT NOT NULL,
       scope TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      logs TEXT NOT NULL DEFAULT '',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(chat_id, section_index)
     )
@@ -280,6 +282,24 @@ export function initDb(): void {
     )
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plan_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      job_index INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      requirement_line_mapping TEXT NOT NULL,
+      content TEXT,
+      build_cmd TEXT NOT NULL DEFAULT '',
+      test_cmd TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      logs TEXT NOT NULL DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(chat_id, job_index)
+    )
+  `);
+
   const migrations = [
     `ALTER TABLE projects DROP COLUMN opencode_api_key`,
     `ALTER TABLE projects ADD COLUMN default_model TEXT NOT NULL DEFAULT ''`,
@@ -301,6 +321,12 @@ export function initDb(): void {
     `ALTER TABLE projects ADD COLUMN blueprint_model TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE projects ADD COLUMN review_model TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE projects ADD COLUMN documentation_model TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE jobs ADD COLUMN feature_id INTEGER`,
+    `ALTER TABLE requirement_outline ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE requirement_outline ADD COLUMN logs TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE plan_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE plan_jobs ADD COLUMN logs TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE jobs DROP COLUMN acceptance_criteria`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* ignore */ }
@@ -401,7 +427,7 @@ export function updateJob(jobId: number, data: Partial<Omit<Job, 'id' | 'created
 export function resetJob(jobId: number): void {
   const db = getDb();
   db.prepare(
-    "UPDATE jobs SET status = 'PENDING', container_id = NULL, retry_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    "UPDATE jobs SET status = 'PENDING', stage = NULL, agent_attempt = NULL, agent_max_retries = NULL, container_id = NULL, retry_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).run(jobId);
 }
 
@@ -483,30 +509,31 @@ export function isPortInUse(port: number, excludeId?: number): boolean {
 export function insertLocalJob(projectId: number, input: {
   title: string;
   description?: string | unknown | null;
-  acceptanceCriteria?: string | unknown | null;
   dependsOn?: string[] | null;
+  featureId?: number | null;
+  feature_id?: number | null;
 }): Job {
   const db = getDb();
 
   const title = typeof input.title === 'string' ? input.title : JSON.stringify(input.title);
   const description = Array.isArray(input.description) ? input.description.join('\n')
     : (typeof input.description === 'object' && input.description !== null ? JSON.stringify(input.description) : input.description ?? null);
-  const acceptanceCriteria = Array.isArray(input.acceptanceCriteria) ? input.acceptanceCriteria.join('\n')
-    : (typeof input.acceptanceCriteria === 'object' && input.acceptanceCriteria !== null ? JSON.stringify(input.acceptanceCriteria) : input.acceptanceCriteria ?? null);
 
   const predecessorJson = input.dependsOn && input.dependsOn.length > 0
     ? JSON.stringify(input.dependsOn)
     : null;
 
+  const featureId = input.featureId ?? input.feature_id ?? null;
+
   const result = db.prepare(`
-    INSERT INTO jobs (project_id, title, description, acceptance_criteria, depends_on, status)
-    VALUES (@projectId, @title, @description, @acceptanceCriteria, @predecessorJson, 'PENDING')
+    INSERT INTO jobs (project_id, title, description, depends_on, status, feature_id)
+    VALUES (@projectId, @title, @description, @predecessorJson, 'PENDING', @featureId)
   `).run({
     projectId,
     title,
     description,
-    acceptanceCriteria,
-    predecessorJson
+    predecessorJson,
+    featureId
   });
 
   const rowId = result.lastInsertRowid as number;
@@ -588,7 +615,7 @@ export function updateJobContainerId(jobId: number, containerId: string | null):
 export function incrementJobRetry(jobId: number): number {
   const db = getDb();
   db.prepare(
-    "UPDATE jobs SET retry_count = retry_count + 1, status = 'PENDING', container_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    "UPDATE jobs SET retry_count = retry_count + 1, status = 'PENDING', updated_at = CURRENT_TIMESTAMP WHERE id = ?"
   ).run(jobId);
   const row = db.prepare("SELECT retry_count FROM jobs WHERE id = ?").get(jobId) as { retry_count: number } | undefined;
   return row?.retry_count ?? 0;
@@ -1155,7 +1182,24 @@ export interface RequirementOutlineRow {
   section_index: number;
   title: string;
   scope: string;
+  status: string;
+  logs: string;
   created_at: string;
+}
+
+export function updateRequirementOutlineStatus(id: number, status: string): void {
+  const db = getDb();
+  db.prepare('UPDATE requirement_outline SET status = ? WHERE id = ?').run(status, id);
+}
+
+export function updateRequirementOutlineLogs(id: number, logs: string): void {
+  const db = getDb();
+  db.prepare('UPDATE requirement_outline SET logs = ? WHERE id = ?').run(logs, id);
+}
+
+export function appendRequirementOutlineLog(id: number, text: string): void {
+  const db = getDb();
+  db.prepare('UPDATE requirement_outline SET logs = logs || ? WHERE id = ?').run(text, id);
 }
 
 export function insertRequirementOutline(data: {
@@ -1452,10 +1496,75 @@ export function deletePlanStoriesByChatId(chatId: number): void {
   db.prepare('DELETE FROM plan_stories WHERE chat_id = ?').run(chatId);
 }
 
+export interface PlanJobRow {
+  id: number;
+  chat_id: number;
+  job_index: number;
+  title: string;
+  description: string;
+  requirement_line_mapping: string;
+  content: string | null;
+  build_cmd: string;
+  test_cmd: string;
+  status: string;
+  logs: string;
+  created_at: string;
+}
+
+export function updatePlanJobStatus(id: number, status: string): void {
+  const db = getDb();
+  db.prepare('UPDATE plan_jobs SET status = ? WHERE id = ?').run(status, id);
+}
+
+export function updatePlanJobLogs(id: number, logs: string): void {
+  const db = getDb();
+  db.prepare('UPDATE plan_jobs SET logs = ? WHERE id = ?').run(logs, id);
+}
+
+export function appendPlanJobLog(id: number, text: string): void {
+  const db = getDb();
+  db.prepare('UPDATE plan_jobs SET logs = logs || ? WHERE id = ?').run(text, id);
+}
+
+export function insertPlanJob(data: {
+  chat_id: number;
+  job_index: number;
+  title: string;
+  description: string;
+  requirement_line_mapping: string;
+}): number {
+  const db = getDb();
+  const result = db.prepare(`
+    INSERT INTO plan_jobs (chat_id, job_index, title, description, requirement_line_mapping)
+    VALUES (@chat_id, @job_index, @title, @description, @requirement_line_mapping)
+  `).run(data);
+  return result.lastInsertRowid as number;
+}
+
+export function updatePlanJobContent(id: number, content: string, buildCmd: string, testCmd: string): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE plan_jobs
+    SET content = ?, build_cmd = ?, test_cmd = ?
+    WHERE id = ?
+  `).run(content, buildCmd, testCmd, id);
+}
+
+export function getPlanJobs(chatId: number): PlanJobRow[] {
+  const db = getDb();
+  return db.prepare('SELECT * FROM plan_jobs WHERE chat_id = ? ORDER BY job_index ASC').all(chatId) as PlanJobRow[];
+}
+
+export function deletePlanJobsByChatId(chatId: number): void {
+  const db = getDb();
+  db.prepare('DELETE FROM plan_jobs WHERE chat_id = ?').run(chatId);
+}
+
 export function deletePlanDataByChatId(chatId: number): void {
   deletePlanStoriesByChatId(chatId);
   deletePlanFeaturesByChatId(chatId);
   deletePlanEpicsByChatId(chatId);
+  deletePlanJobsByChatId(chatId);
 }
 
 export function insertDomain(data: {

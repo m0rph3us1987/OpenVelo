@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y \
 # ── AI CLI tools ──────────────────────────────────────────────────────────────
 # Install all CLIs in one layer — same packages as the agent image
 RUN npm install -g \
-    'opencode-ai@1.14.25'
+    @kilocode/cli
 
 COPY package*.json ./
 COPY .npmrc* ./
@@ -32,8 +32,8 @@ COPY . .
 # Build Vite SPA
 RUN npm run build
 
-# Create opencode config directories
-RUN mkdir -p /root/.local/share/opencode /root/.config/opencode
+# Create kilo config directories
+RUN mkdir -p /root/.local/share/kilo /root/.config/kilo
 
 ENV NODE_ENV=production
 ENV PORT=3000

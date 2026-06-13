@@ -12,7 +12,7 @@ export const CONFIG = {
     REPO_PATH: process.env.REPO_PATH || (IS_WINDOWS ? 'C:\\repo' : '/repo'),
     HOME_DIR: IS_WINDOWS ? (process.env.USERPROFILE || 'C:\\Users\\ContainerAdministrator') : '/root',
     MAX_RETRIES: parseInt(process.env.AGENT_MAX_RETRIES || process.env.MAX_RETRIES || '3', 10),
-    MAX_TIMEOUT: parseInt(process.env.MAX_TIMEOUT || '1800000', 10),
+    AGENT_MAX_TIMEOUT: parseInt(process.env.AGENT_MAX_TIMEOUT || process.env.MAX_TIMEOUT || '1800000', 10),
     AGENT_PLATFORM: (process.env.AGENT_PLATFORM || (IS_WINDOWS ? 'windows' : 'linux')) as 'linux' | 'windows',
 
     // Populated via handshake message from the Orchestrator
@@ -47,6 +47,7 @@ export interface HandshakeConfig {
     staging_branch: string;
     job_title?: string;
     story?: string;
+    agent_max_timeout?: number;
 }
 
 export function applyHandshake(data: HandshakeConfig): void {
@@ -63,6 +64,9 @@ export function applyHandshake(data: HandshakeConfig): void {
     CONFIG.STAGING_BRANCH = data.staging_branch;
     CONFIG.JOB_TITLE = data.job_title ?? '';
     CONFIG.STORY_CONTENT = data.story ?? '';
+    if (typeof data.agent_max_timeout === 'number' && data.agent_max_timeout > 0) {
+        CONFIG.AGENT_MAX_TIMEOUT = data.agent_max_timeout;
+    }
 
     if (data.story) {
         try {

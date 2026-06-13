@@ -47,7 +47,6 @@ export function AddJobDialog({
 
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
-  const [acceptanceCriteria, setAcceptanceCriteria] = React.useState('');
   const [selectedDeps, setSelectedDeps] = React.useState<string[]>([]);
   const [depSearch, setDepSearch] = React.useState('');
   const [depDropdownOpen, setDepDropdownOpen] = React.useState(false);
@@ -60,7 +59,6 @@ export function AddJobDialog({
       setTitle(editJob.title ?? '');
       // Strip HTML tags for plain-text editing
       setDescription(stripHtml(editJob.description ?? ''));
-      setAcceptanceCriteria(stripHtml(editJob.acceptance_criteria ?? ''));
       const deps = editJob.depends_on
         ? (() => { try { return JSON.parse(editJob.depends_on!) as string[]; } catch { return [editJob.depends_on!]; } })()
         : [];
@@ -87,7 +85,6 @@ export function AddJobDialog({
   function resetForm() {
     setTitle('');
     setDescription('');
-    setAcceptanceCriteria('');
     setSelectedDeps([]);
     setDepSearch('');
     setDepDropdownOpen(false);
@@ -132,7 +129,6 @@ export function AddJobDialog({
       const body = {
         title: title.trim(),
         description: description.trim() || null,
-        acceptanceCriteria: acceptanceCriteria.trim() || null,
         dependsOn: selectedDeps.length > 0 ? selectedDeps : null,
       };
 
@@ -196,17 +192,7 @@ export function AddJobDialog({
             />
           </div>
 
-          {/* Acceptance Criteria */}
-          <div className="space-y-1.5">
-            <Label htmlFor="add-job-ac">Acceptance Criteria</Label>
-            <Textarea
-              id="add-job-ac"
-              placeholder="Enter acceptance criteria"
-              rows={3}
-              value={acceptanceCriteria}
-              onChange={(e) => setAcceptanceCriteria(e.target.value)}
-            />
-          </div>
+
 
           {/* Dependencies — uses a div trigger to avoid nested <button> */}
           <div className="space-y-1.5">

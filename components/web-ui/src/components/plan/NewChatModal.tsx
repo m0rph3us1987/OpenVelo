@@ -23,13 +23,13 @@ const MODE_OPTIONS: {
   {
     mode: 'plan',
     label: 'Plan',
-    description: 'Full implementation plan with epics, features, and user stories',
+    description: 'Full implementation plan with epics, features, and jobs',
     icon: ClipboardList,
   },
   {
     mode: 'quick',
     label: 'Quick',
-    description: 'Single user story for simple features or bug fixes',
+    description: 'Single job for simple features or bug fixes',
     icon: Zap,
   },
   {

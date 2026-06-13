@@ -1,111 +1,49 @@
 import fs from 'fs';
 import path from 'path';
-import { getChatSession, getProject, getChatDir, getProjectModels, getPlanEpics, getPlanEpicWithoutFeatures, insertPlanEpic, insertPlanFeature, insertPlanStory, getPlanFeatures, getPlanStories, updatePlanStoryDependsOn, deletePlanDataByChatId, deletePlanFeature } from '@/lib/db';
+import {
+  getChatSession,
+  getProject,
+  getChatDir,
+  getProjectModels,
+  insertPlanJob,
+  updatePlanJobContent,
+  getPlanJobs,
+  deletePlanJobsByChatId,
+  deletePlanDataByChatId,
+  updateChatSession,
+  updatePlanJobStatus,
+  updatePlanJobLogs
+} from '@/lib/db';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { transitionTo } from './index';
 import { stageWsManager } from '@/lib/stage-ws-manager';
 import { loggerService } from '@/lib/logger-service';
 import { getSkillsDir } from '@/lib/skills';
 
-// Manifest types — small JSON the LLM returns in its response text
-interface EpicManifest {
-  build_cmd: string;
-  test_cmd: string;
-  epic_files: string[];
-}
-
-interface FeatureManifest {
-  feature_files: string[];
-}
-
-interface StoryManifest {
-  story_files: string[];
-}
-
-interface DependencyManifest {
-  dependency_file: string;
-}
-
-// File content types — what each individual JSON file on disk contains
-interface EpicFileContent {
+interface DiscoveredJob {
   index: number;
   title: string;
   description: string;
-  content: string;
+  line_mapping: string;
 }
 
-interface FeatureFileContent {
-  epic_index: number;
-  epic_title: string;
-  feature_index: number;
-  title: string;
-  description: string;
-  content: string;
-}
-
-interface StoryFileContent {
-  epic_index: number;
-  epic_title: string;
-  feature_index: number;
-  feature_title: string;
-  story_index: number;
-  title: string;
-  description: string;
-  acceptance_criteria: string;
-}
-
-interface DependenciesResult {
-  dependencies: Array<{
-    story_title: string;
-    depends_on: string[];
-  }>;
-}
-
-function readPlanFile<T>(planDir: string, filename: string, chatId: number): T | null {
-  const filePath = path.join(planDir, filename);
-  if (!fs.existsSync(filePath)) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Plan file not found: ${filePath}`);
-    return null;
-  }
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8').trim();
-    return JSON.parse(content) as T;
-  } catch (err) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse plan file ${filePath}: ${err}`);
-    return null;
-  }
-}
-
-function ensurePlanDir(chatDir: string): string {
-  const planDir = path.join(chatDir, 'plan');
-  if (!fs.existsSync(planDir)) {
-    fs.mkdirSync(planDir, { recursive: true });
-  }
-  return planDir;
-}
-
-function cleanPlanDir(planDir: string): void {
-  if (fs.existsSync(planDir)) {
-    const files = fs.readdirSync(planDir);
-    for (const file of files) {
-      fs.unlinkSync(path.join(planDir, file));
-    }
-  }
+interface DiscoveryManifest {
+  build_cmd: string;
+  test_cmd: string;
+  jobs: DiscoveredJob[];
 }
 
 async function parseJsonWithRetry<T>(
-  client: { sendMessage: (sessionId: string, prompt: string, model: string) => Promise<{ parts: Array<{ type: string; text?: string }> }> },
+  client: any,
   sessionId: string,
   resultText: string,
   expectedKey: string,
-  modelKey: keyof { analyzer_model: string; planning_model: string; requirement_model: string; chat_model: string },
-  models: { analyzer_model: string; planning_model: string; requirement_model: string; chat_model: string },
+  modelKey: 'planning_model',
+  models: { planning_model: string },
   maxAttempts: number = 3
 ): Promise<{ parsed: T | null; finalText: string }> {
   const extractJson = (text: string): T | null => {
-    // Strip markdown code fences if present
     const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-
     try {
       return JSON.parse(stripped) as T;
     } catch {
@@ -127,11 +65,9 @@ async function parseJsonWithRetry<T>(
   }
 
   const correctionModel = models[modelKey];
-
   for (let attempt = 1; attempt < maxAttempts; attempt++) {
     loggerService.appendVerbose(0, 'workflow:plan', `JSON parse failed, attempt ${attempt}/${maxAttempts}, requesting correction`);
     const correctionPrompt = `The JSON you returned was malformed or incomplete. Return ONLY valid JSON with no additional text. Previous response was:\n${resultText.substring(0, 2000)}\n\nReturn only the corrected JSON.`;
-
     try {
       const corrected = await client.sendMessage(sessionId, correctionPrompt, correctionModel);
       const correctedText = corrected.parts.find((p: { type?: string }) => p.type === 'text')?.text?.trim() ?? '';
@@ -143,7 +79,6 @@ async function parseJsonWithRetry<T>(
       loggerService.appendVerbose(0, 'workflow:plan', `Correction request failed: ${err}`);
     }
   }
-
   return { parsed: null, finalText: resultText };
 }
 
@@ -172,33 +107,45 @@ export async function handlePlan(chatId: number): Promise<void> {
 
   if (chat.sub_stage === '') {
     loggerService.appendVerbose(chatId, 'workflow:plan', `Starting plan generation`);
-    transitionTo(chatId, 'plan', 'epics');
-    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'epics' });
+    const planDir = path.join(chatDir, 'plan');
+    if (!fs.existsSync(planDir)) {
+      fs.mkdirSync(planDir, { recursive: true });
+    }
+    // Clean plan dir
+    const files = fs.readdirSync(planDir);
+    for (const file of files) {
+      try {
+        fs.unlinkSync(path.join(planDir, file));
+      } catch (err) {
+        // Ignore files that cannot be unlinked
+      }
+    }
+    deletePlanDataByChatId(chatId);
+    transitionTo(chatId, 'plan', 'discovery');
+    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'discovery' });
     return;
   }
 
-  if (chat.sub_stage === 'epics') {
-    await handleEpics(chatId, chatDir, repoDir, project.id);
+  if (chat.sub_stage === 'discovery') {
+    await handleDiscovery(chatId, chatDir, repoDir, project.id);
     return;
   }
 
-  if (chat.sub_stage === 'features') {
-    await handleFeatures(chatId, chatDir, repoDir, project.id);
-    return;
-  }
-
-  if (chat.sub_stage === 'stories') {
-    await handleStories(chatId, chatDir, repoDir, project.id);
-    return;
-  }
-
-  if (chat.sub_stage === 'dependencies') {
-    await handleDependencies(chatId, chatDir, repoDir, project.id);
+  if (chat.sub_stage === 'generation') {
+    await handleGeneration(chatId, chatDir, repoDir, project.id);
     return;
   }
 
   if (chat.sub_stage === 'plan') {
     loggerService.appendVerbose(chatId, 'workflow:plan', `Plan ready - waiting for user`);
+    return;
+  }
+
+  // Legacy sub-stages from the old epic/feature/story flow. Treat as a
+  // request to start (or restart) the new discovery → generation flow.
+  if (chat.sub_stage === 'epics' || chat.sub_stage === 'features' || chat.sub_stage === 'stories') {
+    loggerService.appendVerbose(chatId, 'workflow:plan', `Recovering from legacy sub_stage=${chat.sub_stage}, restarting plan flow`);
+    transitionTo(chatId, 'plan', '');
     return;
   }
 
@@ -208,25 +155,23 @@ export async function handlePlan(chatId: number): Promise<void> {
   }
 }
 
-async function handleEpics(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
-  loggerService.appendVerbose(chatId, 'workflow:plan', `Generating epics`);
-
-  deletePlanDataByChatId(chatId);
-
-  const planDir = ensurePlanDir(chatDir);
-  cleanPlanDir(planDir);
+async function handleDiscovery(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
+  loggerService.appendVerbose(chatId, 'workflow:plan', `Stage 1: Job Discovery`);
 
   const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-
   await client.ensureStarted().catch((err) => {
     loggerService.appendVerbose(chatId, 'workflow:plan', `Server start failed: ${err.message}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'plan', 'error');
     return;
   });
 
   const models = getProjectModels(projectId);
   const sessionId = await client.createSession();
-  serveRegistry.setSession(chatId, 'plan-epics', sessionId);
+  serveRegistry.setSession(chatId, 'plan-discovery', sessionId);
 
   const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
   let repoContext = '';
@@ -242,366 +187,126 @@ async function handleEpics(chatId: number, chatDir: string, repoDir: string, pro
   }
 
   const promptTemplate = fs.readFileSync(
-    path.join(process.cwd(), 'prompts', 'plan-epic.md'),
+    path.join(process.cwd(), 'prompts', 'plan-jobs-discovery.md'),
     'utf-8'
   );
 
   const prompt = promptTemplate
     .replace(/{CHAT_DIR}/g, chatDir)
     .replace(/{REPO_DIR}/g, repoDir)
-    .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
     .replace(/{REPO_CONTEXT}/g, repoContext)
     .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
     .replace(/{SKILLS_DIR}/g, getSkillsDir());
 
-  loggerService.appendVerbose(chatId, 'workflow:plan', 'Sending epic prompt');
+  loggerService.appendVerbose(chatId, 'workflow:plan', `Sending job discovery prompt`);
 
   try {
     const result = await client.sendMessage(sessionId, prompt, models.planning_model);
-
     const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
     const resultText = textPart?.text?.trim() ?? '';
 
-    const { parsed, finalText } = await parseJsonWithRetry<EpicManifest>(
-      client, sessionId, resultText, 'epic_files', 'planning_model', models
+    const { parsed, finalText } = await parseJsonWithRetry<DiscoveryManifest>(
+      client, sessionId, resultText, 'jobs', 'planning_model', models
     );
 
     if (!parsed) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse epic manifest JSON after retries. Raw response: ${finalText}`);
+      loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse discovery manifest JSON after retries.`);
       transitionTo(chatId, 'plan', 'error');
       return;
     }
 
-    if (!parsed.epic_files || !Array.isArray(parsed.epic_files) || parsed.epic_files.length === 0) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Invalid epic manifest: no epic_files found`);
+    if (!parsed.jobs || !Array.isArray(parsed.jobs) || parsed.jobs.length === 0) {
+      loggerService.appendVerbose(chatId, 'workflow:plan', `Invalid discovery manifest: no jobs found`);
       transitionTo(chatId, 'plan', 'error');
       return;
     }
 
-    for (const filename of parsed.epic_files) {
-      const epic = readPlanFile<EpicFileContent>(planDir, filename, chatId);
-      if (!epic) {
-        loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to read epic file: ${filename}`);
-        transitionTo(chatId, 'plan', 'error');
-        return;
-      }
-      insertPlanEpic({
+    // Save discovery manifest to disk
+    const planDir = path.join(chatDir, 'plan');
+    fs.writeFileSync(
+      path.join(planDir, 'discovery-manifest.json'),
+      JSON.stringify(parsed, null, 2)
+    );
+
+    deletePlanJobsByChatId(chatId);
+    for (const job of parsed.jobs) {
+      insertPlanJob({
         chat_id: chatId,
-        epic_index: epic.index,
-        title: epic.title,
-        description: epic.description,
-        content: epic.content,
-        build_cmd: parsed.build_cmd || '',
-        test_cmd: parsed.test_cmd || '',
+        job_index: job.index,
+        title: job.title,
+        description: job.description,
+        requirement_line_mapping: job.line_mapping
       });
     }
 
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Generated ${parsed.epic_files.length} epics`);
-    transitionTo(chatId, 'plan', 'features');
-    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'features' });
+    // Update project build/test commands based on discovery
+    const db = require('@/lib/db');
+    db.getDb().prepare('UPDATE projects SET build_cmd = ?, test_cmd = ? WHERE id = ?')
+      .run(parsed.build_cmd || '', parsed.test_cmd || '', projectId);
+
+    loggerService.appendVerbose(chatId, 'workflow:plan', `Discovered ${parsed.jobs.length} jobs. Transitioning to generation stage.`);
+    transitionTo(chatId, 'plan', 'generation');
+    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'generation' });
   } catch (err) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `sendMessage failed: ${err}`);
+    loggerService.appendVerbose(chatId, 'workflow:plan', `Job Discovery failed: ${err}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'plan', 'error');
   }
 }
 
-async function handleFeatures(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
-  const epics = getPlanEpics(chatId);
-  if (epics.length === 0) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `No epics found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  }
-
-  const planDir = ensurePlanDir(chatDir);
-  const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-
-  await client.ensureStarted().catch((err) => {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Server start failed: ${err.message}`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  });
-
-  const models = getProjectModels(projectId);
-  const sessionId = await client.createSession();
-  serveRegistry.setSession(chatId, 'plan-features', sessionId);
-
-  const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
-  let repoContext = '';
-  if (fs.existsSync(repoContextPath)) {
-    repoContext = fs.readFileSync(repoContextPath, 'utf-8');
-  }
-
-  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
-  if (!fs.existsSync(requirementPath)) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  }
-
-  const promptTemplate = fs.readFileSync(
-    path.join(process.cwd(), 'prompts', 'plan-feature.md'),
-    'utf-8'
-  );
-
-  while (true) {
-    const epic = getPlanEpicWithoutFeatures(chatId);
-    if (!epic) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `All features generated, transitioning to stories`);
-      transitionTo(chatId, 'plan', 'stories');
-      stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'stories' });
-      return;
-    }
-
-    const currentIndex = epics.findIndex(e => e.id === epic.id) + 1;
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Generating features for epic ${currentIndex}/${epics.length}: ${epic.title}`);
-
-    stageWsManager.broadcastToStage(chatId, 'plan', {
-      type: 'sub_stage',
-      sub_stage: 'features',
-      progress: `Generating features for ${epic.title} (${currentIndex}/${epics.length})`
-    });
-
-    // Build existing features context for deduplication
-    const existingFeatures = getPlanFeatures(chatId);
-    let existingFeaturesText = 'None yet.';
-    if (existingFeatures.length > 0) {
-      existingFeaturesText = existingFeatures
-        .map(f => {
-          const parentEpic = epics.find(e => e.id === f.epic_id);
-          return `- [Epic: ${parentEpic?.title || 'Unknown'}] Feature: ${f.title} — ${f.description}`;
-        })
-        .join('\n');
-    }
-
-    const prompt = promptTemplate
-      .replace(/{CHAT_DIR}/g, chatDir)
-      .replace(/{REPO_DIR}/g, repoDir)
-      .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
-      .replace(/{REPO_CONTEXT}/g, repoContext)
-      .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
-      .replace(/{SKILLS_DIR}/g, getSkillsDir())
-      .replace(/{EPIC_INDEX}/g, String(epic.epic_index))
-      .replace(/{EPIC_TITLE}/g, epic.title)
-      .replace(/\{EPIC_CONTENT\}/g, epic.content)
-      .replace(/\{EXISTING_FEATURES\}/g, existingFeaturesText);
-
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Sending feature prompt for ${epic.title}`);
-
-    try {
-      const result = await client.sendMessage(sessionId, prompt, models.planning_model);
-
-      const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
-      const resultText = textPart?.text?.trim() ?? '';
-
-      const { parsed, finalText } = await parseJsonWithRetry<FeatureManifest>(
-        client, sessionId, resultText, 'feature_files', 'planning_model', models
-      );
-
-      if (!parsed) {
-        loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse feature manifest JSON after retries. Raw response: ${finalText}`);
-        transitionTo(chatId, 'plan', 'error');
-        return;
-      }
-
-      if (!parsed.feature_files || !Array.isArray(parsed.feature_files) || parsed.feature_files.length === 0) {
-        loggerService.appendVerbose(chatId, 'workflow:plan', `Invalid feature manifest: no feature_files found for epic ${epic.title}`);
-        transitionTo(chatId, 'plan', 'error');
-        return;
-      }
-
-      for (const filename of parsed.feature_files) {
-        const feature = readPlanFile<FeatureFileContent>(planDir, filename, chatId);
-        if (!feature) {
-          loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to read feature file: ${filename}`);
-          transitionTo(chatId, 'plan', 'error');
-          return;
-        }
-        insertPlanFeature({
-          chat_id: chatId,
-          epic_id: epic.id,
-          feature_index: feature.feature_index,
-          title: feature.title,
-          description: feature.description,
-          content: feature.content,
-        });
-      }
-
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Generated ${parsed.feature_files.length} features for epic ${epic.title}`);
-    } catch (err) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `sendMessage failed: ${err}`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
+async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+  const executing = new Set<Promise<void>>();
+  for (const item of items) {
+    const p = Promise.resolve().then(() => fn(item));
+    executing.add(p);
+    const clean = () => executing.delete(p);
+    p.then(clean, clean);
+    if (executing.size >= limit) {
+      await Promise.race(executing);
     }
   }
+  await Promise.all(executing);
 }
 
-async function handleStories(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
-  const allFeatures = getPlanFeatures(chatId);
-  if (allFeatures.length === 0) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `No features found`);
+async function handleGeneration(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
+  loggerService.appendVerbose(chatId, 'workflow:plan', `Stage 2: Job Specification Generation`);
+
+  const jobs = getPlanJobs(chatId);
+  if (jobs.length === 0) {
+    loggerService.appendVerbose(chatId, 'workflow:plan', `No discovered jobs found in database.`);
     transitionTo(chatId, 'plan', 'error');
     return;
   }
 
-  const planDir = ensurePlanDir(chatDir);
-  const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-
-  await client.ensureStarted().catch((err) => {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Server start failed: ${err.message}`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  });
-
-  const models = getProjectModels(projectId);
-  const sessionId = await client.createSession();
-  serveRegistry.setSession(chatId, 'plan-stories', sessionId);
-
-  const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
-  let repoContext = '';
-  if (fs.existsSync(repoContextPath)) {
-    repoContext = fs.readFileSync(repoContextPath, 'utf-8');
+  // Reset statuses and logs in database
+  for (const job of jobs) {
+    updatePlanJobStatus(job.id, 'pending');
+    updatePlanJobLogs(job.id, '');
   }
 
-  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
-  if (!fs.existsSync(requirementPath)) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  }
-
-  const epics = getPlanEpics(chatId);
-
-  const promptTemplate = fs.readFileSync(
-    path.join(process.cwd(), 'prompts', 'plan-story.md'),
-    'utf-8'
-  );
-
-  for (let i = 0; i < allFeatures.length; i++) {
-    const feature = allFeatures[i];
-
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Generating stories for feature ${i + 1}/${allFeatures.length}: ${feature.title}`);
-
-    stageWsManager.broadcastToStage(chatId, 'plan', {
-      type: 'sub_stage',
-      sub_stage: 'stories',
-      progress: `Generating stories for ${feature.title} (${i + 1}/${allFeatures.length})`
-    });
-
-    const epic = epics.find(e => e.id === feature.epic_id);
-
-    // Build existing stories context for deduplication
-    const existingStories = getPlanStories(chatId);
-    let existingStoriesText = 'None yet.';
-    if (existingStories.length > 0) {
-      existingStoriesText = existingStories
-        .map(s => {
-          const parentFeature = allFeatures.find(f => f.id === s.feature_id);
-          const parentEpic = epics.find(e => e.id === parentFeature?.epic_id);
-          return `- [Epic: ${parentEpic?.title || 'Unknown'} > Feature: ${parentFeature?.title || 'Unknown'}] Story: ${s.title}`;
-        })
-        .join('\n');
-    }
-
-    const prompt = promptTemplate
-      .replace(/{CHAT_DIR}/g, chatDir)
-      .replace(/{REPO_DIR}/g, repoDir)
-      .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
-      .replace(/{REPO_CONTEXT}/g, repoContext)
-      .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
-      .replace(/{SKILLS_DIR}/g, getSkillsDir())
-      .replace(/{EPIC_INDEX}/g, String(epic?.epic_index || 0))
-      .replace(/{EPIC_TITLE}/g, epic?.title || '')
-      .replace(/{FEATURE_INDEX}/g, String(feature.feature_index))
-      .replace(/{FEATURE_TITLE}/g, feature.title)
-      .replace(/\{FEATURE_CONTENT\}/g, feature.content)
-      .replace(/\{EXISTING_STORIES\}/g, existingStoriesText);
-
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Sending story prompt for ${feature.title}`);
-
-    try {
-      const result = await client.sendMessage(sessionId, prompt, models.planning_model);
-
-      const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
-      const resultText = textPart?.text?.trim() ?? '';
-
-      const { parsed, finalText } = await parseJsonWithRetry<StoryManifest>(
-        client, sessionId, resultText, 'story_files', 'planning_model', models
-      );
-
-      if (!parsed) {
-        loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse story manifest JSON after retries. Raw response: ${finalText}`);
-        transitionTo(chatId, 'plan', 'error');
-        return;
-      }
-
-      if (!parsed.story_files || !Array.isArray(parsed.story_files) || parsed.story_files.length === 0) {
-        loggerService.appendVerbose(chatId, 'workflow:plan', `No story files found for feature ${feature.title}, deleting feature`);
-        deletePlanFeature(feature.id);
-        continue;
-      }
-
-      for (const filename of parsed.story_files) {
-        const story = readPlanFile<StoryFileContent>(planDir, filename, chatId);
-        if (!story) {
-          loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to read story file: ${filename}`);
-          transitionTo(chatId, 'plan', 'error');
-          return;
-        }
-        insertPlanStory({
-          chat_id: chatId,
-          feature_id: feature.id,
-          story_index: story.story_index,
-          title: story.title,
-          description: story.description,
-          acceptance_criteria: story.acceptance_criteria,
-          depends_on: '[]',
-        });
-      }
-
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Generated ${parsed.story_files.length} stories for feature ${feature.title}`);
-    } catch (err) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `sendMessage failed: ${err}`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
-    }
-  }
-
-  loggerService.appendVerbose(chatId, 'workflow:plan', `All stories generated, transitioning to dependencies`);
-  transitionTo(chatId, 'plan', 'dependencies');
+  // Broadcast progress update
+  const progressMsg = `Generating specifications for ${jobs.length} jobs in batches of max 4 parallel sub-agents...`;
   stageWsManager.broadcastToStage(chatId, 'plan', {
     type: 'sub_stage',
-    sub_stage: 'dependencies'
+    sub_stage: 'generation',
+    progress: progressMsg
   });
-}
-
-async function handleDependencies(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
-  loggerService.appendVerbose(chatId, 'workflow:plan', `Resolving dependencies`);
-
-  stageWsManager.broadcastToStage(chatId, 'plan', {
-    type: 'sub_stage',
-    sub_stage: 'dependencies',
-    progress: `Solving dependencies...`
-  });
-
-  const stories = getPlanStories(chatId);
-  if (stories.length === 0) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `No stories found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
-  }
 
   const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-
   await client.ensureStarted().catch((err) => {
     loggerService.appendVerbose(chatId, 'workflow:plan', `Server start failed: ${err.message}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'plan', 'error');
     return;
   });
 
   const models = getProjectModels(projectId);
-  const sessionId = await client.createSession();
-  serveRegistry.setSession(chatId, 'plan-deps', sessionId);
 
   const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
   let repoContext = '';
@@ -616,99 +321,123 @@ async function handleDependencies(chatId: number, chatDir: string, repoDir: stri
     return;
   }
 
-  const storiesJson = JSON.stringify(stories.map(s => ({
-    id: s.id,
-    title: s.title,
-    description: s.description,
-    content: s.description
-  })), null, 2);
-
   const promptTemplate = fs.readFileSync(
-    path.join(process.cwd(), 'prompts', 'plan-dependencies.md'),
+    path.join(process.cwd(), 'prompts', 'plan-jobs-runner.md'),
     'utf-8'
   );
 
-  const prompt = promptTemplate
-    .replace(/{CHAT_DIR}/g, chatDir)
-    .replace(/{REPO_DIR}/g, repoDir)
-    .replace(/{SKILLS_DIR}/g, getSkillsDir())
-    .replace(/{UPLOAD_DIR}/g, path.join(chatDir, 'uploads'))
-    .replace(/{REPO_CONTEXT}/g, repoContext)
-    .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
-    .replace(/{ALL_STORIES_JSON}/g, storiesJson);
-
-  loggerService.appendVerbose(chatId, 'workflow:plan', 'Sending dependency prompt');
+  const planDir = path.join(chatDir, 'plan');
+  if (!fs.existsSync(planDir)) {
+    fs.mkdirSync(planDir, { recursive: true });
+  }
 
   try {
-    const result = await client.sendMessage(sessionId, prompt, models.planning_model);
-
-    const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
-    const resultText = textPart?.text?.trim() ?? '';
-
-    const { parsed, finalText } = await parseJsonWithRetry<DependencyManifest>(
-      client, sessionId, resultText, 'dependency_file', 'planning_model', models
-    );
-
-    if (!parsed) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse dependency manifest JSON after retries. Raw response: ${finalText}`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
-    }
-
-    if (!parsed.dependency_file) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Invalid dependency manifest`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
-    }
-
-    const planDir = ensurePlanDir(chatDir);
-    const depResult = readPlanFile<DependenciesResult>(planDir, parsed.dependency_file, chatId);
-    if (!depResult) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to read dependency file: ${parsed.dependency_file}`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
-    }
-
-    if (!depResult.dependencies || !Array.isArray(depResult.dependencies)) {
-      loggerService.appendVerbose(chatId, 'workflow:plan', `Invalid dependency result in file`);
-      transitionTo(chatId, 'plan', 'error');
-      return;
-    }
-
-    // Build positional index map: title -> array index (matches order sent to LLM)
-    const storyIndexByTitle = new Map(stories.map((s, i) => [s.title, i]));
-    const storyByTitle = new Map(stories.map(s => [s.title, s]));
-
-    for (const dep of depResult.dependencies) {
-      const story = storyByTitle.get(dep.story_title);
-      if (!story) continue;
-
-      const storyIndex = storyIndexByTitle.get(dep.story_title) ?? -1;
-      const rawDeps: string[] = dep.depends_on || [];
-
-      // Defensive sanitization: strip any dep that points to itself, a forward index,
-      // or an unknown title. A story at index i may only depend on stories at index j < i.
-      const sanitizedDeps = rawDeps.filter(depTitle => {
-        const depIndex = storyIndexByTitle.get(depTitle);
-        if (depIndex === undefined) {
-          loggerService.appendVerbose(chatId, 'workflow:plan', `Removed unknown dependency edge: "${dep.story_title}" -> "${depTitle}"`);
-          return false;
-        }
-        if (depIndex >= storyIndex) {
-          loggerService.appendVerbose(chatId, 'workflow:plan', `Removed invalid dependency edge (forward/self): "${dep.story_title}" [${storyIndex}] -> "${depTitle}" [${depIndex}]`);
-          return false;
-        }
-        return true;
+    // Run outlines concurrently up to a limit of 4
+    await runWithLimit(4, jobs, async (job) => {
+      updatePlanJobStatus(job.id, 'running');
+      stageWsManager.broadcastToStage(chatId, 'plan', {
+        type: 'sub_stage',
+        sub_stage: 'generation',
+        progress: progressMsg
       });
 
-      updatePlanStoryDependsOn(story.id, JSON.stringify(sanitizedDeps));
+      const jobPrompt = promptTemplate
+        .replace(/{CHAT_DIR}/g, chatDir)
+        .replace(/{REPO_DIR}/g, repoDir)
+        .replace(/{REPO_CONTEXT}/g, repoContext)
+        .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
+        .replace(/{SKILLS_DIR}/g, getSkillsDir())
+        .replace(/{JOB_INDEX}/g, String(job.job_index))
+        .replace(/{JOB_TITLE}/g, job.title)
+        .replace(/{JOB_DESCRIPTION}/g, job.description)
+        .replace(/{JOB_LINE_MAPPING}/g, job.requirement_line_mapping);
+
+      const sessionId = await client.createSession();
+
+      // Periodically reconstruct and save logs to the database while running
+      const interval = setInterval(async () => {
+        try {
+          const logs = await client.reconstructSessionLogs(sessionId);
+          updatePlanJobLogs(job.id, logs);
+          stageWsManager.broadcastToStage(chatId, 'plan', {
+            type: 'sub_stage',
+            sub_stage: 'generation',
+            progress: progressMsg
+          });
+        } catch {
+          // ignore
+        }
+      }, 1000);
+
+      try {
+        await client.sendMessage(sessionId, jobPrompt, models.planning_model, true);
+        
+        clearInterval(interval);
+        const finalLogs = await client.reconstructSessionLogs(sessionId);
+        updatePlanJobLogs(job.id, finalLogs);
+
+        const jobFile = path.join(planDir, `job-${job.job_index}.json`);
+        if (fs.existsSync(jobFile)) {
+          updatePlanJobStatus(job.id, 'completed');
+        } else {
+          loggerService.appendVerbose(chatId, 'workflow:plan', `Specification file missing for job index ${job.job_index} after sub-agent run`);
+          updatePlanJobStatus(job.id, 'failed');
+          throw new Error(`Specification file job-${job.job_index}.json was not generated`);
+        }
+      } catch (err) {
+        clearInterval(interval);
+        updatePlanJobStatus(job.id, 'failed');
+        throw err;
+      } finally {
+        try {
+          await client.deleteSession(sessionId);
+        } catch {
+          // ignore
+        }
+        stageWsManager.broadcastToStage(chatId, 'plan', {
+          type: 'sub_stage',
+          sub_stage: 'generation',
+          progress: progressMsg
+        });
+      }
+    });
+
+    // Sync generated spec files from disk to the database
+    const project = getProject(projectId);
+
+    for (const job of jobs) {
+      const jobFile = path.join(planDir, `job-${job.job_index}.json`);
+      if (fs.existsSync(jobFile)) {
+        try {
+          const content = fs.readFileSync(jobFile, 'utf-8');
+          const parsed = JSON.parse(content) as { content?: string };
+          if (!parsed || typeof parsed.content !== 'string' || parsed.content.length === 0) {
+            loggerService.appendVerbose(chatId, 'workflow:plan', `Spec file for job ${job.job_index} has empty/missing 'content' field`);
+            transitionTo(chatId, 'plan', 'error');
+            return;
+          }
+          updatePlanJobContent(job.id, parsed.content, project?.build_cmd || '', project?.test_cmd || '');
+        } catch (err) {
+          loggerService.appendVerbose(chatId, 'workflow:plan', `Failed to parse spec file for job index ${job.job_index}: ${err}`);
+          transitionTo(chatId, 'plan', 'error');
+          return;
+        }
+      } else {
+        loggerService.appendVerbose(chatId, 'workflow:plan', `Specification file missing for job index ${job.job_index}`);
+        transitionTo(chatId, 'plan', 'error');
+        return;
+      }
     }
 
-    loggerService.appendVerbose(chatId, 'workflow:plan', `Resolved ${depResult.dependencies.length} dependencies`);
+    loggerService.appendVerbose(chatId, 'workflow:plan', `All specifications synced. Plan ready.`);
     transitionTo(chatId, 'plan', 'plan');
-    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'plan', progress: `Plan` });
+    stageWsManager.broadcastToStage(chatId, 'plan', { type: 'sub_stage', sub_stage: 'plan' });
   } catch (err) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `sendMessage failed: ${err}`);
+    loggerService.appendVerbose(chatId, 'workflow:plan', `Job specs orchestration failed: ${err}`);
+    const currentChat = getChatSession(chatId);
+    if (currentChat && !currentChat.running) {
+      return;
+    }
     transitionTo(chatId, 'plan', 'error');
   }
 }

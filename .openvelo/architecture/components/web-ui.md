@@ -1,187 +1,135 @@
 # Web UI & Express API Architecture
 
-The `web-ui` component serves as the central orchestration cockpit. It comprises a frontend React SPA (Vite, Tailwind, Radix UI) and an Express.js backend running on Node.js.
-
----
+The `web-ui` component is the central orchestration cockpit: a frontend React SPA (Vite, Tailwind, Radix UI) and an Express.js backend running on Node.js.
 
 ## 1. Directory Structure & Key Files
-- `src/`: Frontend React SPA.
-  - `pages/`: Page containers (e.g. `PlanPage.tsx` for requirements, `ExecutePage.tsx` for container monitoring).
-  - `components/`: UI components (Tailwind CSS, Radix UI).
-    - `plan/`: Chat sub-components (`ChatCollecting.tsx`, `ChatDomain.tsx`, etc.) mapped to active states.
-  - `hooks/`: Custom state hooks (e.g. `useStageWebSocket.ts` to listen for stage shifts).
-  - `context/`: Application state providers (e.g. `AuthContext`, `ToastContext`).
-- `src/api/`: Backend Express.js Server.
-  - `server.ts`: Starts the server (port 3000) and boots both REST routers and WebSocket Server endpoints.
-  - `router.ts`: Coordinates API route mappings.
-  - `routes/`: Express endpoint modules (`chats.ts`, `projects.ts`, `jobs.ts`, `auth.ts`).
-  - `middleware/`: Authentication and workspace permission checks.
-- `src/lib/`: Unified Core Utilities.
-  - `db.ts`: SQLite schema and data accessor queries (using `better-sqlite3`).
-  - `websocket-manager.ts`: Manages fanning out logs and status updates to browsers.
-  - `stage-ws-manager.ts`: Manages WebSocket rooms scoped to active planning stages.
-  - `opencode-serve-registry.ts`: Spawns and tracks active `opencode serve` proxy processes.
+- `src/` (frontend SPA, Vite):
+  - `pages/` — `HomePage`, `LoginPage`, `PlanPage`, `ProjectPage`, `ChangePasswordPage`.
+  - `components/plan/` — per-stage chat UIs (`ChatCollecting`, `ChatDomain`, `ChatPlan`, `ChatRequirement`, `ChatUserstory`, `ChatVerify`, `ChatList`, `ChatInit`, `ChatAnalysis`, `ChatFinalAssessment`, `ParallelLogViewer`, etc.). `ParallelLogViewer` streams live stdout/stderr from multiple in-flight agent containers in the planning view.
+  - `components/{auth,dashboard,layout,models,projects,settings,theme,ui}/` — supporting UI (see [web-ui-subsystems.md](web-ui-subsystems.md) for the full inventory).
+  - `hooks/` — 8 custom state hooks: `useChatListWebSocket`, `useChatWebSocket`, `useJobWebSocket`, `useProjectStatus`, `useStageWebSocket`, `useTheme`, `useWebSocket`, `useWorkItems`.
+  - `context/` — `AuthContext`, `ToastContext`.
+  - `types/express.d.ts` — Express type augmentation for `req.user`.
+- `src/api/` (backend):
+  - `server.ts` — HTTP + WebSocket server (default port 3000). Owns both `wss` (frontend clients) and `orchWss` (orchestrator client) `noServer: true` upgrade handlers, heartbeat, and the orchestrator message dispatcher.
+  - `router.ts` — top-level Express router. Mounts sub-routers and hosts the top-level `POST /chatCreate`, `POST /chatOpen`, `POST /chatDelete` endpoints.
+  - `routes/` — `auth.ts`, `chats.ts`, `domains.ts`, `groups.ts`, `models.ts`, `plan.ts`, `projects.ts`, `settings.ts`, `themes.ts`, `uploads.ts`, `users.ts`. **Job endpoints are nested under `routes/projects.ts` as `/:id/jobs/...`** — there is no `routes/jobs.ts`.
+  - `middleware/auth.ts` — `requireAuth`, `requireAdmin`, `requireProjectAccess`.
+- `src/lib/` — core utilities (see [web-ui-subsystems.md](web-ui-subsystems.md)).
+- `prompts/` — 12 markdown prompt templates (see [web-ui-state-machine.md](../core/web-ui-state-machine.md) for the mapping). The `plan` stage was reorganised in the kilo migration from per-entity Epic/Feature/Story prompts into a job-discovery → orchestrator → runner trio.
 
----
+## 2. Database Schema (`src/lib/db.ts`)
 
-## 2. Core Database Schema & Relationships (`src/lib/db.ts`)
-
-The database uses SQLite with WAL mode enabled. The primary tables are structured as follows:
+SQLite (`better-sqlite3`) with WAL mode and foreign keys enabled.
 
 ```
-                  ┌───────────────────────────────┐
-                  │           projects            │
-                  └───────────────┬───────────────┘
-                                  │ 1
-                                  │
-                                  ├───────────────────────────────┐
-                                  │ N                             │ N
-                          ┌───────▼───────┐               ┌───────▼───────┐
-                          │     jobs      │               │ chat_sessions │
-                          └───────────────┘               └───────┬───────┘
-                                                                  │ 1
-                                                                  │
-                                                          ┌───────▼───────┐
-                                                          │ chat_messages │
-                                                          └───────┬───────┘
-                                                                  │ 1
-                                                                  │
-                                                          ┌───────▼───────┐
-                                                          │message_options│
-                                                          └───────────────┘
+   ┌────────────────┐         ┌────────────────┐
+   │     users      │ 1───N   │ group_members  │ N───1   ┌────────────┐
+   └────────────────┘         └────────────────┘◄────────│   groups   │
+                                                        └─────┬──────┘
+                                                              │ 1
+                                                              │ N
+                                                     ┌────────▼──────┐
+   ┌────────────────┐ 1     N    ┌────────────────┐ N      │group_projects│
+   │    projects    │───────────►│     jobs       │        └──────────────┘
+   └───────┬────────┘            └────────────────┘
+           │ 1
+           │ N
+   ┌───────▼──────────┐ 1     N   ┌──────────────────┐
+   │  chat_sessions   │──────────►│  chat_messages   │ 1───1 ┌───────────────────────┐
+   │  (mode, stage,   │           └──────────────────┘◄─────│chat_message_options   │
+   │   sub_stage,     │                                     └───────────────────────┘
+   │   sub_stage_pre_ │
+   │   error,         │  Global:
+   │   error_type,    │    ┌──────────────────┐
+   │   running)       │    │  ui_settings     │  (theme, app_title, debug_sse_console, security_enabled)
+   └──────────────────┘    └──────────────────┘
+                              ┌──────────────────┐
+                              │     models       │  (provider, model_name)
+                              └──────────────────┘
+
+   Per-session tables: domains / domain_questions / domain_answers
+                       requirement_outline / requirement_section
+                       plan_epics / plan_features / plan_stories
 ```
 
-- **`projects`**: Stores project names, git URLs, PAT credentials, dynamic build/test command strings, maximum retries, timeouts, parallel limits, and **per-phase AI model configurations**. Each project can specify dedicated models for different agent phases via `blueprint_model`, `review_model`, `documentation_model`, with fallback to `default_model`.
-- **`jobs`**: Tracks story execution, predecessor lists (`depends_on`), active docker container IDs, starting timestamps, runtime calculations, and retry counters.
-- **`chat_sessions`**: Persists planning conversations. Stores active states (`stage` and `sub_stage`) along with the pre-error snapshot state (`sub_stage_pre_error`) to facilitate recovery.
-- **`chat_messages`** & **`chat_message_options`**: Stores the full conversational transcript (role system vs user) and caches prompt alternatives/options suggested by the LLM.
-- **`domains`**, **`domain_questions`** & **`domain_answers`**: Stores the domain outline and interactive Q&A state.
+- **`projects`** — name, port, repo host/url/PAT, docker image, backend, **nine per-phase model fields** (§3), build/test commands, staging branch, poll interval, agent timeout, parallel/retries limits, remove-deleted-containers flag, status, pid.
+- **`jobs`** — execution row. `depends_on` is a JSON array of predecessor job IDs; `feature_id` references `plan_features.id`; `container_id`, `branch`, `retry_count`, `runtime`, `agent_attempt` / `agent_max_retries` reflect live in-flight state. (The pre-kilo `acceptance_criteria` column was dropped in favour of `feature_id`.)
+- **`chat_sessions`** — `mode` (`plan`/`quick`/`verify`), `stage`, `sub_stage`, `sub_stage_pre_error` (saved on every non-error transition so retry endpoints can resume), `error_type` (set on `error` sub_stage), `running` (single-runner lock).
+- **`chat_messages`** + **`chat_message_options`** — full transcript (role `user`/`system`) + LLM `options` JSON.
+- **`domains`/`domain_questions`/`domain_answers`** — domain outline + Q&A state.
+- **`requirement_outline`/`requirement_section`** — hierarchical requirement text. `requirement_outline` carries `status` + `logs` columns for live per-row progress streaming.
+- **`plan_epics`/`plan_features`/`plan_stories`** — planning tree (kept for backwards compatibility with old chats).
+- **`plan_jobs`** — new (kilo-era) flat job backlog produced by the `plan` stage. Columns: `job_index`, `title`, `description`, `requirement_line_mapping`, `content`, `build_cmd`, `test_cmd`, `status` (default `'pending'`), `logs`, plus a `UNIQUE(chat_id, job_index)` constraint.
+- **`models`** — global registry populated by `POST /api/models/refresh`.
+- **`ui_settings`** — key/value bag.
+- **`users`/`groups`/`group_members`/`group_projects`** — auth/ACL. See [../core/auth.md](../core/auth.md).
 
-### Model Specialization (`getProjectModels()`)
+## 3. Model Specialization (`getProjectModels()`)
 
-The `projects` table stores nine model fields that control which AI model is used for each phase of the agent lifecycle:
+The `projects` table stores **nine** model fields:
 
 | Field | Purpose | Fallback |
 |-------|---------|----------|
-| `default_model` | Primary model identifier | (required) |
-| `execution_model` | Implementation & coding tasks | `default_model` |
-| `blueprint_model` | Architecture & blueprint generation | `default_model` |
-| `analyzer_model` | Code analysis & diagnostics | `default_model` |
-| `chat_model` | Planning workflow conversational AI | `default_model` |
+| `default_model` | Primary identifier | (required) |
+| `execution_model` | Agent implementation | `default_model` |
+| `blueprint_model` | Agent architecture/blueprint | `default_model` |
+| `analyzer_model` | Code analysis (planning stages) | `default_model` |
+| `chat_model` | Planning conversational AI | `default_model` |
 | `requirement_model` | Requirements elicitation | `default_model` |
 | `planning_model` | Story breakdown & estimation | `default_model` |
-| `review_model` | Code review & critique | `default_model` |
-| `documentation_model` | Documentation generation | `default_model` |
+| `review_model` | Agent code review | `default_model` |
+| `documentation_model` | Agent documentation | `default_model` |
 
-The `getProjectModels(projectId)` function in `src/lib/db.ts` resolves all nine model identifiers for a given project, substituting `default_model` for any unset phase-specific model. This is called by the orchestrator to pass the correct model configuration to agent containers.
+`getProjectModels(projectId)` resolves all nine, substituting `default_model` for any unset. The `models` table gates project startup: `POST /api/projects/:id/start` validates that any non-default value for `blueprint_model`, `execution_model`, `review_model`, or `documentation_model` exists in `models` (else 400).
 
-**Database Schema**: The `projects` table contains three new model columns added via migration:
-- `blueprint_model TEXT NOT NULL DEFAULT ''`
-- `review_model TEXT NOT NULL DEFAULT ''`
-- `documentation_model TEXT NOT NULL DEFAULT ''`
+The orchestrator's `configure` payload (sent in response to its `hello` — **not** on connection) carries the four agent-side models: `execution_model`, `blueprint_model`, `review_model`, `documentation_model`. The other five live on the project row but are consumed by the web-ui's planning stages only.
 
-### Model Validation on Project Start (`POST /:id/start`)
+## 4. WebSockets (`server.ts`)
 
-When a project execution is started via `POST /:id/start`, the API validates that any custom models (non-default) specified for `blueprint_model`, `execution_model`, `review_model`, or `documentation_model` exist in the `models` table. If a specified model is not found, the API returns a 400 error with a descriptive message instructing the user to refresh models or select a valid model in the Models tab of project settings.
+Two `noServer: true` WebSocket servers share the HTTP `upgrade` dispatcher.
 
-The validation iterates through all four phase-specific models and checks them against the available models:
+### A. Orchestrator Endpoint — `/api/orchestrator/ws?projectId=X`
+No JWT auth (internal). Requires `?projectId=<id>`, else close 1008. 30 s `ws.ping()` heartbeat; missed pong → terminate + `handleOrchestratorDeath(projectId)`.
 
-```typescript
-const allResolvedModels = [
-  { field: 'blueprint_model', value: models.blueprint_model },
-  { field: 'execution_model', value: models.execution_model },
-  { field: 'review_model', value: models.review_model },
-  { field: 'documentation_model', value: models.documentation_model },
-];
-```
+Message flow (orchestrator → server):
 
-### Configure Message to Orchestrator (`server.ts`)
+| Type | Server action |
+|------|---------------|
+| `hello` | Reset stale RUNNING jobs to PENDING, send `configure`. |
+| `ready` | No-op (pull model). |
+| `get_next_jobs { count }` | `getNextRunnableJobs(projectId, count)`, `setJobsRunning(jobIds)`, reply with `job_list`. |
+| `job_update` | Update `jobs` (status, containerId, startedAt, stage, agentAttempt, agentMaxRetries). Broadcast on project channel. |
+| `job_retry` | `incrementJobRetry()`. If > `max_retries`, mark FAILED. Else reset to PENDING and broadcast. |
+| `log` | Broadcast to project room. |
+| `job_log_chunk` | Broadcast to per-job channel (`WsKeys.jobKey(jobId)`). |
+| `goodbye` | Reset RUNNING jobs to PENDING, remove orchestrator, broadcast `orchestrator_stopped`. |
 
-When an orchestrator connects via WebSocket (`/api/orchestrator/ws`), the server sends a `configure` payload containing the full project configuration including the resolved per-phase models:
+`handleOrchestratorDeath()` resets RUNNING jobs to PENDING, removes the orchestrator, marks the project stopped, broadcasts `orchestrator_stopped`.
 
-```json
-{
-  "type": "configure",
-  "config": {
-    "id": 1,
-    "name": "My Project",
-    "execution_model": "anthropic/claude-3-5-sonnet",
-    "blueprint_model": "anthropic/claude-3-5-sonnet",
-    "review_model": "anthropic/claude-3-5-haiku",
-    "documentation_model": "anthropic/claude-3-5-sonnet",
-    ...
-  }
-}
-```
+### B. Frontend Streaming Endpoints
+- `/ws?projectId=X` — project room.
+- `/ws?chatId=X` — chat room (`useChatWebSocket`).
+- `/ws?jobId=X` — per-job stdout/stderr (`useJobWebSocket`).
+- `/ws/stage/<stage>?chatId=X` — per-stage sub_stage channel.
 
-This ensures the orchestrator passes the correct model identifiers to agent containers for each phase of the lifecycle.
+All protected by `authenticateUpgrade()`. The orchestrator endpoint is exempt.
 
-The configure message is built in `server.ts:handleOrchestratorConnection()` by spreading the project object and overriding the model fields with their resolved values from `getProjectModels()`.
+## 5. Repository Validation & URL Generation (`src/api/routes/projects.ts`)
 
----
+`POST /projects/validate` runs the step named in the body:
+- `name` — uniqueness check
+- `port` — in-use check
+- `repo` — `git ls-remote <authenticated_url>` (10 s timeout). The authenticated URL is built with the host-aware `generateFinalRepoURL` (see below), so the `repoHost` in the body is forwarded to the URL builder.
+- `docker` — `docker.getImage(name).inspect()` (local image present)
+- `models` — default_model exists in `models` table
+- `coding` / `planning` — no-op success
 
-## 3. WebSockets Layer (`src/api/server.ts`)
+`generateFinalRepoURL(repoUrl, repoPat, repoHost)` builds the authenticated URL (host-aware, three-arg signature):
 
-The Express server initializes two primary WebSocket Server systems running alongside standard HTTP traffic:
+| `repoHost` | Username | Password |
+|------------|----------|----------|
+| `bitbucket` | `x-token-auth` | PAT |
+| `github` / `gitea` / `azure-devops` / (default) | `token` | PAT |
 
-### A. Upward Orchestrator Endpoint (`/api/orchestrator/ws`)
-- **Purpose**: Registers active orchestrators dialing in.
-- **Message Flow**:
-  - Registers the client to its respective `projectId`.
-  - Dispatches project configurations via a `configure` payload on connection.
-  - Receives `ready` triggers from the orchestrator requesting jobs. The backend queries SQLite, topologically sorts active jobs, and yields next jobs only if all their prerequisite tasks listed in `depends_on` are marked `COMPLETED` and the orchestrator has free execution slots.
-  - Receives log updates and stage updates (`job_update`) from running agent containers, updates the SQLite `jobs` table, and forwards them to the active browsers.
-
-### B. Frontend Streaming Endpoint (`/ws?projectId=X`)
-- **Purpose**: Feeds live terminal outputs to project execution dashboards.
-- **Message Flow**:
-  - Registers client browsers subscribing to project rooms.
-  - Fans out log events and database updates (`job_update`, `chat_updated`) to browser sockets in real time.
-
----
-
-## 4. Repository Validation & URL Generation (`src/api/routes/projects.ts`)
-
-The `POST /projects/validate` endpoint validates repository configuration including git remote accessibility. The `generateFinalRepoURL()` helper constructs authenticated URLs for git ls-remote operations.
-
-### Host-Specific Authentication
-
-| Host | Username | Password | Use Case |
-|------|----------|----------|----------|
-| `bitbucket` | `x-token-auth` | PAT | Bitbucket Cloud/Server authentication |
-| `github` | `token` | PAT | GitHub.com authentication |
-| `gitea` | `token` | PAT | Gitea self-hosted instances |
-| `azure-devops` | `token` | PAT | Azure DevOps Git repositories |
-
-### Function Signature
-
-```typescript
-export function generateFinalRepoURL(repoUrl: string, repoPat: string, repoHost: string): string
-```
-
-### Validation Flow (`/projects/validate` with `step: 'repo'`)
-
-1. Client sends `repo_url`, `repo_pat`, and `repo_host` in request body
-2. `generateFinalRepoURL()` constructs authenticated URL using host-specific username
-3. `git ls-remote <authenticated_url>` is executed with 10-second timeout
-4. Returns `{ success: true }` if remote is reachable, 400 error otherwise
-
-```typescript
-case 'repo': {
-  if (repo_url) {
-    const finalUrl = generateFinalRepoURL(repo_url, repo_pat || '', repo_host || 'github');
-    try {
-      execFileSync('git', ['ls-remote', finalUrl], { stdio: 'ignore', timeout: 10000 });
-      return res.json({ success: true });
-    } catch {
-      return res.status(400).json({ error: 'Repository access failed' });
-    }
-  }
-}
-```
-
-### Error Handling
-
-- Empty/null PAT returns original URL unchanged (public repository)
-- Malformed URLs are returned as-is without modification
-- Git ls-remote timeout (10s) triggers validation failure
+Returns the original URL unchanged if `repoPat` is empty or the URL is malformed.

@@ -1,7 +1,7 @@
 {
   "name": "openvelo-agent",
   "version": "1.0.0",
-  "description": "",
+  "description": "OpenVelo agent that drives kilo via direct JSON-RPC over stdio (kilo acp)",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

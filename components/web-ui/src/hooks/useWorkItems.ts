@@ -45,9 +45,15 @@ export function useWorkItems({
         prev.map((j) => {
           if (j.id !== lastUpdate.jobId) return j;
           const updated: Job = { ...j, status: lastUpdate.status as Job['status'] };
-          if (lastUpdate.stage !== undefined) updated.stage = lastUpdate.stage;
-          if (lastUpdate.agentAttempt !== undefined) updated.agent_attempt = lastUpdate.agentAttempt;
-          if (lastUpdate.agentMaxRetries !== undefined) updated.agent_max_retries = lastUpdate.agentMaxRetries;
+          if (lastUpdate.status === 'PENDING') {
+            updated.stage = null;
+            updated.agent_attempt = null;
+            updated.agent_max_retries = null;
+          } else {
+            if (lastUpdate.stage !== undefined) updated.stage = lastUpdate.stage;
+            if (lastUpdate.agentAttempt !== undefined) updated.agent_attempt = lastUpdate.agentAttempt;
+            if (lastUpdate.agentMaxRetries !== undefined) updated.agent_max_retries = lastUpdate.agentMaxRetries;
+          }
           return updated;
         })
       )

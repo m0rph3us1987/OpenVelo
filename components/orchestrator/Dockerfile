@@ -17,8 +17,8 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 
-# Create opencode config directories
-RUN mkdir -p /root/.local/share/opencode /root/.config/opencode
+# Create kilo config directories
+RUN mkdir -p /root/.local/share/kilo /root/.config/kilo
 
 ENV NODE_ENV=production
 

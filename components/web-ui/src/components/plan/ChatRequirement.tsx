@@ -2,10 +2,12 @@ import * as React from 'react';
 import type { ChatSession } from '@/lib/types';
 import { useStageWebSocket } from '@/hooks/useStageWebSocket';
 import { TextLog } from '@/components/ui/text-log';
+import { ParallelLogViewer } from './ParallelLogViewer';
 import { Button } from '@/components/ui/button';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Edit, Send, Download } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 interface ChatRequirementProps {
   chat: ChatSession;
@@ -17,6 +19,7 @@ interface ChatRequirementProps {
 export function ChatRequirement({ chat, onHeaderInfo, viewOnly, overrideSubStage }: ChatRequirementProps) {
   const { subStage: wsSubStage, progress } = useStageWebSocket({ chatId: chat.id, stage: 'requirement', enabled: !viewOnly });
   const subStage = viewOnly ? (overrideSubStage ?? 'requirement') : wsSubStage;
+  const [actionLoading, setActionLoading] = React.useState(false);
 
   React.useEffect(() => {
     const titleMap: Record<string, string> = {
@@ -33,14 +36,88 @@ export function ChatRequirement({ chat, onHeaderInfo, viewOnly, overrideSubStage
       subtitle = progress;
     }
 
+    let showSpinner = subStage === 'outline' || subStage === 'sections' || subStage === 'generate';
+    if (chat.running === 0) {
+      subtitle = 'Stopped';
+      showSpinner = false;
+    }
+
     onHeaderInfo?.({
       title: `${chat.name} - ${subtitle}`,
-      showSpinner: subStage === 'outline' || subStage === 'sections' || subStage === 'generate',
+      showSpinner,
     });
-  }, [chat.id, subStage, progress, chat.name, onHeaderInfo]);
+  }, [chat.id, subStage, progress, chat.name, onHeaderInfo, chat.running]);
 
-  if (subStage === 'outline' || subStage === 'sections' || subStage === 'generate') {
-    return <TextLog key={`${chat.id}-${subStage}`} chatId={chat.id} clearKey={`${chat.id}-${subStage}`} />;
+  const handleStop = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/stop`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to stop:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleResume = async () => {
+    setActionLoading(true);
+    try {
+      await fetch(`/api/chats/${chat.id}/resume`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to resume:', err);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const renderStopResumeOverlay = () => {
+    if (viewOnly) return null;
+    const isGenerating = subStage === 'outline' || subStage === 'sections' || subStage === 'generate';
+    if (!isGenerating && chat.running !== 0) return null;
+
+    return (
+      <div className="absolute top-4 right-4 z-50">
+        {chat.running === 1 ? (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleStop}
+            disabled={actionLoading}
+            className="shadow-md"
+          >
+            Stop
+          </Button>
+        ) : (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={handleResume}
+            disabled={actionLoading}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md"
+          >
+            Resume
+          </Button>
+        )}
+      </div>
+    );
+  };
+
+  if (subStage === 'outline' || subStage === 'generate') {
+    return (
+      <div className="relative w-full h-full">
+        {renderStopResumeOverlay()}
+        <TextLog key={`${chat.id}-${subStage}`} chatId={chat.id} clearKey={`${chat.id}-${subStage}`} />
+      </div>
+    );
+  }
+
+  if (subStage === 'sections') {
+    return (
+      <div className="relative w-full h-full">
+        {renderStopResumeOverlay()}
+        <ParallelLogViewer chatId={chat.id} type="requirement" />
+      </div>
+    );
   }
 
   if (subStage === 'error') {
@@ -63,6 +140,7 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
   const [content, setContent] = React.useState('');
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [showRegenConfirm, setShowRegenConfirm] = React.useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
@@ -99,7 +177,20 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
     }
   };
 
-  const handleGeneratePlan = async () => {
+  const handleRegenerateRequirement = () => {
+    setShowRegenConfirm(true);
+  };
+
+  const confirmRegenerate = async () => {
+    setShowRegenConfirm(false);
+    try {
+      await fetch(`/api/chats/${chat.id}/requirement/regenerate`, { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to regenerate requirement:', err);
+    }
+  };
+
+  const handleGenerate = async () => {
     console.log('[requirement] Generate plan called');
     try {
       await fetch('/api/chats/generatePlan', {
@@ -111,22 +202,6 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
       console.error('Failed to generate plan:', err);
     }
   };
-
-  const handleGenerateQuickStory = async () => {
-    console.log('[requirement] Generate quick story called');
-    try {
-      await fetch('/api/chats/generateQuickStory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId: chat.id }),
-      });
-    } catch (err) {
-      console.error('Failed to generate quick story:', err);
-    }
-  };
-
-  const isQuickMode = chat.mode === 'quick';
-  const handleGenerate = isQuickMode ? handleGenerateQuickStory : handleGeneratePlan;
 
   const handleDownload = () => {
     const blob = new Blob([content], { type: 'text/markdown' });
@@ -154,49 +229,51 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
 
   return (
     <div className="flex flex-col h-full">
-      {viewOnly ? (
-        <div className="flex justify-end gap-2 p-2 border-b border-border">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleDownload}
-            disabled={loading || !content}
-          >
-            <Download className="h-4 w-4 mr-1" />
-            Download requirement
-          </Button>
-        </div>
-      ) : (
-        <div className="flex justify-end gap-2 p-2 border-b border-border">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={isEditing ? handleSave : () => setIsEditing(true)}
-            disabled={saving}
-          >
-            {saving ? (
-              'Saving...'
-            ) : isEditing ? (
-              <>
-                <Send className="h-4 w-4 mr-1" />
-                Save
-              </>
-            ) : (
-              <>
-                <Edit className="h-4 w-4 mr-1" />
-                Edit
-              </>
-            )}
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={handleGenerate}
-          >
-            {isQuickMode ? 'Generate user story' : 'Generate plan'}
-          </Button>
-        </div>
-      )}
+      <div className="flex justify-end gap-2 p-2 border-b border-border">
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={handleRegenerateRequirement}
+        >
+          Regenerate
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleDownload}
+          disabled={loading || !content}
+        >
+          <Download className="h-4 w-4 mr-1" />
+          Download requirement
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={isEditing ? handleSave : () => setIsEditing(true)}
+          disabled={saving}
+        >
+          {saving ? (
+            'Saving...'
+          ) : isEditing ? (
+            <>
+              <Send className="h-4 w-4 mr-1" />
+              Save
+            </>
+          ) : (
+            <>
+              <Edit className="h-4 w-4 mr-1" />
+              Edit
+            </>
+          )}
+        </Button>
+        <Button
+          variant="default"
+          size="sm"
+          onClick={handleGenerate}
+        >
+          {chat.mode === 'quick' ? 'Generate job' : 'Generate plan'}
+        </Button>
+      </div>
 
       <div className="flex-1 overflow-auto p-6">
         {!viewOnly && isEditing ? (
@@ -213,16 +290,24 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
         )}
       </div>
 
-      {!viewOnly && (
-        <div className="flex justify-center p-4 border-t border-border">
-          <Button
-            variant="default"
-            onClick={handleGenerate}
-          >
-            {isQuickMode ? 'Generate user story' : 'Generate plan'}
-          </Button>
-        </div>
-      )}
+      <Dialog open={showRegenConfirm} onOpenChange={setShowRegenConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Regenerate requirement</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to regenerate the requirement from scratch? This will delete the current requirement and any generated plans.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="ghost" onClick={() => setShowRegenConfirm(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmRegenerate}>
+              Regenerate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -8,7 +8,6 @@ import { handleDomain } from './stage-domain';
 import { handleFinalAssessment } from './stage-final-assessment';
 import { handleRequirement } from './stage-requirement';
 import { handlePlan } from './stage-plan';
-import { handleQuickStory } from './stage-quick-story';
 import { handleVerify } from './stage-verify';
 
 type WorkflowHandler = (chatId: number) => void;
@@ -28,7 +27,6 @@ export function getHandler(stage: string, subStage: string): WorkflowHandler | n
   if (stage === 'final_assessment' && subStage === 'user') return handleFinalAssessment;
   if (stage === 'requirement') return handleRequirement;
   if (stage === 'plan') return handlePlan;
-  if (stage === 'quick_story') return handleQuickStory;
   if (stage === 'verify') return handleVerify;
   return null;
 }
@@ -50,6 +48,18 @@ export function runWorkflow(chatId: number): void {
     console.log(`[workflow] Chat ${chatId} could not be updated`);
     return;
   }
+
+  wsManager.broadcastToProject(updated.project_id, {
+    type: 'chat_updated',
+    chatId: chatId,
+    stage: updated.stage,
+    sub_stage: updated.sub_stage,
+    running: 1,
+  });
+  stageWsManager.broadcastToStage(chatId, updated.stage, {
+    type: 'running_status',
+    running: true,
+  });
 
   console.log(`[workflow] Running for chat ${chatId}, stage=${chat.stage}, sub_stage=${chat.sub_stage}`);
 
@@ -134,5 +144,4 @@ export { handleDomain } from './stage-domain';
 export { handleFinalAssessment } from './stage-final-assessment';
 export { handleRequirement } from './stage-requirement';
 export { handlePlan } from './stage-plan';
-export { handleQuickStory } from './stage-quick-story';
 export { handleVerify } from './stage-verify';

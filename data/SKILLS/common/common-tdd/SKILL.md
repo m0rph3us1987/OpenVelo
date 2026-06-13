@@ -54,6 +54,7 @@ Every test must follow Arrange-Act-Assert:
 - **Minimalism**: Don't add features/options beyond current test (YAGNI).
 - **Isolation**: Mock external APIs (HTTP) and Time.
 - **Realism**: Prefer real DBs (test containers) and fast internal services (<200ms).
+- **Sequential & Isolated Execution (CRITICAL)**: Never share mutable folders (like uploads or cache directories), database files, or ports across different test files. Always mock configs or redirect paths to a unique per-file temporary directory (e.g., using `os.tmpdir()` or `tempfile.gettempdir()`) to prevent filesystem races during parallel runs. Alternatively, configure the test runner or test files to execute sequentially.
 
 ## **Verification Checklist**
 
@@ -62,6 +63,7 @@ Every test must follow Arrange-Act-Assert:
 - [ ] Minimal code implemented passed?
 - [ ] AAA structure followed?
 - [ ] Coverage thresholds met?
+- [ ] No shared filesystem/resource races across parallel tests? (Isolated or sequential execution verified?)
 
 ## **Expert References**
 
@@ -76,3 +78,4 @@ Every test must follow Arrange-Act-Assert:
 - **No test-after**: Writing tests post-implementation defeats TDD. Delete and restart.
 - **No assertion-free tests**: test without assert not test.
 - **No testing implementation**: Test behavior and contracts, not internal calls.
+- **Shared Test Resources**: Writing tests that use the same global directories (e.g., global uploads dir) or global/shared databases without isolating them per test file, leading to flaky test runs in parallel environments.

@@ -11,16 +11,16 @@
 
   Once execution begins, OpenVelo spawns parallel, isolated AI agents within Linux Docker containers. These agents act as autonomous developers: they clone your repository, blueprint the architecture, write the
   code, and run your build and test commands. If tests fail, the agent enters a self-correcting retry loop—diagnosing errors and adjusting the implementation until all tests pass and a final AI review is
-  approved. The result? A pristine Pull Request delivered directly to your GitHub, Gitea, or Azure DevOps repository.
+  approved. The result? A pristine Pull Request delivered directly to your GitHub, Gitea, Azure DevOps, or Bitbucket repository.
 
   Key Features:
    * Conversational Planning Pipeline: Go from vague ideas to rigorous REQUIREMENT.md docs and strictly ordered backlogs via an interactive, multi-phase AI chat (Analyze → Collect → Domain → Quiz → Assessment →
      Plan).
    * Autonomous Agent Execution: Linux-native containerized AI agents handle the entire coding lifecycle: Setup → Blueprinting → Implementation → Testing → AI Review → Push.
    * Self-Healing Test Loops: Agents autonomously run your existing test suites, parse the output, and iteratively fix bugs until the build passes.
-   * Parallel Processing & Dependency Management: OpenVelo intelligently graphs your backlog, running independent User Stories in parallel while strictly enforcing sequential execution for overlapping
-     architectural changes to avoid merge conflicts.
-   * Universal LLM Proxy: Bring your own model. All AI interactions are routed through opencode, allowing you to seamlessly swap out underlying LLMs for planning, analyzing, and execution.
+   * Parallel Processing & Dependency Management: OpenVelo intelligently graphs your backlog, running independent jobs in parallel while strictly enforcing sequential execution for overlapping
+      architectural changes to avoid merge conflicts.
+   * Universal LLM Proxy: Bring your own model. All AI interactions are routed through Kilo, allowing you to swap out underlying LLMs for planning, analyzing, and execution. Planning stages route through a local `kilo serve` daemon REST API, while execution agents run in-container and interact with LLMs using a JSON-RPC 2.0 interface via the `kilo acp` subprocess.
    * Optimized for Linux: Built to leverage the stability and performance of Linux Docker environments for high-concurrency agent orchestration.
 
   Stop managing tasks and start managing outcomes. OpenVelo is open-source and ready to accelerate your repository today.
@@ -54,7 +54,7 @@
 
 ## Architecture Overview
 
-OpenVelo consists of three components that work together. All AI interactions are routed through **OpenCode** (`opencode serve`), which acts as a unified proxy to the configured LLM provider and model.
+OpenVelo consists of three components that work together. All AI interactions are routed through **Kilo** (`kilo serve`), which acts as a unified proxy to the configured LLM provider and model.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -102,11 +102,11 @@ OpenVelo consists of three components that work together. All AI interactions ar
                                │  & Test → Review]* →      │
                                │  Documenting → Push       │
                                │                           │
-                               │  AI via OpenCode serve    │
-                               │  ┌─────────────────────┐  │
-                               │  │ opencode serve      │  │
-                               │  │ → LLM provider/model│  │
-                               │  └─────────────────────┘  │
+                                │  AI via Kilo serve        │
+                                │  ┌─────────────────────┐  │
+                                │  │ kilo serve          │  │
+                                │  │ → LLM provider/model│  │
+                                │  └─────────────────────┘  │
                                │                           │
                                │  openvelo-agent:linux     │
                                └───────────────────────────┘
@@ -114,11 +114,11 @@ OpenVelo consists of three components that work together. All AI interactions ar
 
 **Data flow:**
 
-1. **Plan**: Click the **Plan** button on the project page to open the Planning modal. Chat with the AI through Analyze → Collect → Domain → Quiz → Assessment phases to produce either a `REQUIREMENT.MD` + structured backlog (requirement chat) or a User Story (feature chat).
-2. **Push**: Send the backlog or story to the project with a single click.
+1. **Plan**: Click the **Plan** button on the project page to open the Planning modal. Chat with the AI through Analyze → Collect → Domain → Quiz → Assessment phases to produce a `REQUIREMENT.md` + structured backlog. Alternatively, you can use the Verify chat to validate and extract jobs from an existing requirements document.
+2. **Push**: Send the backlog to the project with a single click.
 3. **Execute**: The Web UI spawns an Orchestrator for the project (child process in dev mode, Docker container in Docker mode). The Orchestrator dials back to the web-ui via WebSocket and receives job assignments.
-4. **Agent**: Each container clones the repo, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, updates architectural documentation, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, or Azure DevOps). All AI interactions go through OpenCode, which proxies to the configured LLM provider and model.
-5. **Monitor**: The Execute dashboard streams live logs and job status from the Orchestrator through the web-ui WebSocket. Each job displays its current pipeline stage (Setup → Blueprint → Implementing → Build & Test → Review → Documenting → Push) and retry counter in real time.
+4. **Agent**: Each container clones the repo, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, updates architectural documentation, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, Azure DevOps, or Bitbucket). Agent-side LLM calls are routed through the `kilo acp` subprocess speaking JSON-RPC 2.0. Blueprint, review, and documentation phases can each be routed to a different model via the project's **Agent Models** settings.
+5. **Monitor**: The Execute dashboard streams live logs, job status, the agent's internal plan progress, token usage (input/output/cached), context window limits, and costs from the Orchestrator through the web-ui WebSocket in real time.
 
 ---
 
@@ -131,7 +131,7 @@ OpenVelo consists of three components that work together. All AI interactions ar
 | **Node.js v20+**   | Required for all three components                                |
 | **Docker Desktop** | Must be running with Linux containers enabled |
 | **Git**            | Required inside agent containers and on the host                 |
-| **OpenCode**       | Installed and authenticated on the host — used as the AI backend |
+| **Kilo**           | Installed and authenticated on the host — used as the AI backend |
 
 ### Docker mode (running as containers)
 
@@ -139,7 +139,7 @@ OpenVelo consists of three components that work together. All AI interactions ar
 | ------------------ | ----------------------------------------------------------------------------------- |
 | **Docker Desktop** | Linux-containers mode (Linux/macOS/WSL2) |
 | **Git**            | On the host only (for cloning this repo)                                            |
-| **OpenCode**       | Authenticated on the host — credentials are mounted into the web-ui container       |
+| **Kilo**           | Authenticated on the host — credentials are mounted into the web-ui container       |
 
 ---
 
@@ -191,7 +191,7 @@ You can also build individual images — see [NPM Scripts](#npm-scripts) for all
 **Prerequisites:**
 - Docker Desktop with Linux containers mode enabled.
 - Create a `.env` file in the root directory (see `.env.example`). Set `OPENVELO_DATA_DIR` to an absolute path on your host (e.g., `/home/user/openvelo-data`).
-- OpenCode must be authenticated on the host — the compose file mounts `~/.local/share/opencode/auth.json` and `~/.config/opencode` into the container.
+- Kilo must be authenticated on the host — the compose file mounts `~/.local/share/kilo/auth.json` and `~/.config/kilo` into the container.
 
 **Execution:**
 ```bash
@@ -213,24 +213,34 @@ All configuration is managed through the **Project Settings** dialog in the Web 
 
 ### Models
 
-OpenVelo uses **OpenCode** as a unified AI proxy. You can configure different LLM provider/model combinations for each stage of the pipeline. If a specific model field is left blank, it falls back to the **Default Model**.
+OpenVelo uses **Kilo** as a unified AI proxy. The Models tab in the project form is split into two groups: **Web-UI Models** (consumed by the planning chat) and **Agent Models** (forwarded to the orchestrator and applied inside each agent container). You can configure different LLM provider/model combinations for each stage of the pipeline. If a specific model field is left blank, it falls back to the **Default Model**.
+
+**Web-UI Models**
 
 | Setting             | Description                                                                                    |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
 | Default Model       | Fallback model used when a stage-specific model is not set (e.g. `anthropic/claude-sonnet-4-20250514`) |
-| Execution Model     | Model used by agents for code implementation                                                   |
-| Analyzer Model      | Model used for repository analysis                                                             |
+| Analyzer Model      | Model used for repository analysis (planning stages)                                           |
 | Chat Model          | Model used for planning chat conversations                                                     |
 | Requirement Model   | Model used for generating requirements documents                                               |
-| Planning Model      | Model used for epic/feature/story planning                                                     |
+| Planning Model      | Model used for job discovery / orchestration / runner prompts                                  |
+
+**Agent Models**
+
+| Setting             | Description                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| Blueprint Model     | Model used by the agent to draft `IMPLEMENTATION_PLAN.md`                                       |
+| Coding Model        | Model used by the agent for code implementation (formerly the "Execution Model")                |
+| Review Model        | Model used by the agent for the self-review phase                                              |
+| Documentation Model | Model used by the agent to refresh `.openvelo/architecture/` docs                              |
 
 ### Repo
 
 | Setting             | Description                                                                                       |
 | ------------------- | ------------------------------------------------------------------------------------------------- |
-| Repo Host           | Where the repository is hosted: `GitHub`, `Gitea`, or `Azure DevOps`                              |
-| Repo URL            | Git clone URL **without** an embedded token (e.g. `https://github.com/USER/REPO.git`)             |
-| Repo Token          | Personal Access Token for the repo — embedded into the URL at runtime only, never stored in the URL |
+| Repo Host           | Where the repository is hosted: `GitHub`, `Gitea`, `Azure DevOps`, or `Bitbucket`                  |
+| Repo URL            | Git clone URL **without** an embedded token (e.g. `https://your-host.com/owner/repo.git`)         |
+| Repo Token          | Personal Access Token for the repo — embedded into the URL at runtime only, never stored in the URL. For Bitbucket the PAT is sent as the password with the `x-token-auth` username; for all other hosts the PAT is sent as the password with the `token` username. |
 | Repo Working Branch | Target branch for agent PRs (default: `staging`)                                                  |
 
 ### Build
@@ -255,11 +265,10 @@ OpenVelo uses **OpenCode** as a unified AI proxy. You can configure different LL
 
 ## Planning Pipeline
 
-The **Planning modal** supports three modes:
+The **Planning modal** supports two modes:
 
-- **Requirement chat (plan)** — Full end-to-end: analyze → collect → domain plan → grill → final assessment → `REQUIREMENT.MD` → Epic/Feature/Story backlog → push to project
-- **Feature chat (quick)** — Story-only: analyze → collect → domain plan → grill → final assessment → User Story → push to project
-- **Verify chat** — Upload an existing requirements document for validation and story extraction
+- **Requirement chat (plan)** — Full end-to-end: analyze → collect → domain plan → grill → final assessment → `REQUIREMENT.md` → Job backlog → push to project
+- **Verify chat** — Upload an existing requirements document for validation and job extraction
 
 ### Phases
 
@@ -270,33 +279,32 @@ The **Planning modal** supports three modes:
 | **Domain**           | AI identifies domains (areas of concern) and generates targeted questions per domain to fill in details                                       |
 | **Quiz**             | Verification phase — the AI challenges the collected information, looking for gaps and contradictions                                         |
 | **Assessment**       | Reviews all information from prior phases, identifies remaining gaps, contradictions, missing non-functional requirements, and ambiguities. Asks one question at a time until confident all gaps are resolved |
-| **Requirement**      | Generates the `REQUIREMENT.MD` document from all collected information (requirement chat only)                                                |
-| **Plan**             | Generates the Epic → Feature → User Story backlog with strictly sequential dependency ordering for epics and features. Evaluates `data/SKILLS/INDEX.md` to adopt relevant technology-specific rules (requirement chat only) |
-| **Story**            | Generates a single User Story with acceptance criteria, also factoring in relevant skills from `data/SKILLS/INDEX.md` (feature chat only)                                                                   |
+| **Requirement**      | Generates the `REQUIREMENT.md` document from all collected information (requirement chat only)                                                |
+| **Plan**             | Generates a flat **Job** backlog via a three-step prompt chain: `plan-jobs-discovery.md` (emit the list of jobs) → `plan-jobs-orchestrator.md` (per-job orchestration metadata) → `plan-jobs-runner.md` (per-job runner prompt). Evaluates `data/SKILLS/INDEX.md` to adopt relevant technology-specific rules (requirement chat only) |
 
 ---
 
 ## Execution Pipeline
 
-Each agent runs a 6-phase workflow inside its container, with the middle three phases forming a retry loop:
+Each agent runs a 7-phase workflow inside its container, driving a unified blueprinting → implementing → testing → reviewing retry loop:
 
 ```
-Setup → Blueprint → [ Implementing → Build & Test → Review ]* → Documenting → Push
-                      ▲                        │       │
-                      └────── on failure ──────┘───────┘
+Setup → [ Blueprinting → Implementing → Testing → Reviewing ]* → Documenting → Push
+          ▲                                         │
+          └─────────────── on failure ──────────────┘
 ```
 
 | Phase            | Stage String     | Description                                                                                                                                             |
 | ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Setup**        | `setup`          | Clones the repository, creates working branches, starts the OpenCode server, analyzes the project for required tools, and installs them                  |
-| **Blueprint**    | `blueprinting`   | Evaluates the user story and existing repository architecture to produce a detailed `IMPLEMENTATION_PLAN.md` guiding the agent's code changes.           |
-| **Implementing** | `implementing`   | On the first attempt, sends the full story, repo context, and any prior error history to the AI. On retries, sends only the error text for targeted fixes |
-| **Build & Test** | `testing`        | Runs the configured build command and test command. If either fails, the errors are appended to `BUILD_ERRORS.md` and the loop retries from Implement    |
-| **Review**       | `reviewing`      | A fresh AI session self-reviews the diff and produces a verdict (`pass` or `fail`). If it fails, findings are appended to `BUILD_ERRORS.md` and the loop retries from Implement |
-| **Documenting**  | `documenting`    | Automatically analyzes codebase changes, checks `.openvelo/architecture/_INDEX.md`, and updates or creates architectural domain documentation.          |
-| **Push**         | `pushing`        | Commits changes, rebases onto the target branch, pushes with `--force-with-lease`, opens a Pull Request, and auto-merges                                |
+| **Setup**        | `setup`          | Clones the repository, creates working branches, writes `kilo.json` permissions, initializes the Kilo ACP client, checks tools, and installs them        |
+| **Blueprint**    | `blueprinting`   | Evaluates the user story and repo architecture to produce a detailed `IMPLEMENTATION_PLAN.md` guiding code changes (uses `planner.txt` prompt).          |
+| **Implementing** | `implementing`   | On the first attempt, sends `implementer.txt` prompt and blueprint plan. On retries, sends the original story and injected failure context.               |
+| **Build & Test** | `testing`        | Runs build and test commands (uses `test.txt`). LLM writes `TEST_REPORT.json` containing verdict/error log. Failure loops back to Blueprinting.          |
+| **Review**       | `reviewing`      | A fresh AI session self-reviews the diff (uses `review.txt`) and writes `REVIEW.json`. Failure loops back to Blueprinting with findings/repair hint.    |
+| **Documenting**  | `documenting`    | Automatically analyzes codebase changes (uses `document.txt`), checks `.openvelo/architecture/_INDEX.md`, and updates or creates documentation.        |
+| **Push**         | `pushing`        | Commits changes, rebases onto the staging branch, force-pushes, and opens a Pull Request on the repo host.                                               |
 
-The Implementing → Build & Test → Review loop shares a single retry counter (configured via `agent_max_retries`, default 3). The Implementing phase reuses the same AI session across retries so conversation history accumulates, while Review creates a fresh session each attempt.
+The blueprinting → implementing → testing → reviewing loop shares a single retry counter (configured via `max_retries` / `agent_max_retries`, default 3). The blueprinting and implementing stages reuse the same plan+implement session (mode-switched internally between plan and code modes) to accumulate and retain conversation history, while reviewing uses a fresh session for each attempt.
 
 ---
 
@@ -304,9 +312,9 @@ The Implementing → Build & Test → Review loop shares a single retry counter 
 
 Jobs declare predecessor jobs via the `depends_on` field (a JSON array of job IDs). The web-ui's job scheduler enforces these dependencies — a job is only dispatched when all its predecessors are in `COMPLETED` status.
 
-- **Strictly Sequential Epics & Features:** To prevent merge conflicts and overlapping architectural changes, Epics and Features are planned with strict sequential dependencies (Epic C depends on Epic B, Epic B depends on A). This ensures features never run in parallel if they touch the same artifacts.
-- **Parallel User Stories:** User Stories within a feature can run in parallel, provided they do not edit the same files.
-- **Lightweight Discovery:** Dependency relationships are mapped to a `dependencies.json` file on disk parsed directly by the backend, replacing the legacy approach of generating massive LLM JSON blobs. When pushing a full backlog, stories are topologically sorted so dependency IDs are stable before insertion.
+- **Flat Job Backlog with Sequential Dependencies:** The planning stage produces a flat list of jobs in the `plan_jobs` table. The `plan-dependencies.md` prompt computes a `dependencies.json` that is parsed by the backend to populate `jobs.depends_on`. Jobs are topologically sorted so dependency IDs are stable before insertion. To prevent merge conflicts and overlapping architectural changes, the planner is expected to assign sequential `depends_on` chains between jobs that touch the same artifacts, while leaving truly independent jobs dependency-free so they can run in parallel.
+- **Optional Feature Grouping:** Each `jobs` row carries a `feature_id` FK back to its parent `plan_features` row (kept for backwards compatibility with chats created under the old Epic/Feature/Story flow). The feature tree (`plan_epics` / `plan_features` / `plan_stories`) is still in the schema and can be used for grouping/UI, but it is no longer the source of truth for execution order — that lives in `jobs.depends_on`.
+- **Lightweight Discovery:** Dependency relationships are mapped to a `dependencies.json` file on disk parsed directly by the backend, replacing the legacy approach of generating massive LLM JSON blobs. When pushing a full backlog, jobs are topologically sorted so dependency IDs are stable before insertion.
 
 ---
 
@@ -315,7 +323,7 @@ Jobs declare predecessor jobs via the `depends_on` field (a JSON array of job ID
 OpenVelo has two levels of retry:
 
 - **Container retries** (`max_retries`, default 3): If an agent container fails or times out, the orchestrator re-spawns it. The new container receives the error history from previous attempts so it can avoid repeating the same mistakes.
-- **Agent build retries** (`agent_max_retries`, default 3): Inside each container, the agent loops through implement → test → review until the review passes, up to this limit. Both test failures and review failures increment the same counter.
+- **Agent build retries** (`agent_max_retries`, default 3): Inside each container, the agent loops through blueprinting → implementing → testing → reviewing until the review passes. Any test or review failure loops back to blueprinting (re-planning) with the failure context, incrementing the retry counter. The plan+implement session is kept alive across retries to retain conversation history.
 
 The **agent timeout** (`agent_max_timeout`, default 30 minutes) is an inactivity watchdog — it resets on every log line from the agent. If no output is produced for the configured duration, the container is stopped, a checkpoint commit is made, and a retry is triggered.
 
@@ -426,7 +434,7 @@ The web-ui is a React SPA (Vite + Tailwind CSS + Radix UI) backed by an Express 
 
 - **Project management**: Create, configure, and monitor projects.
 - **Planning**: AI-assisted requirement gathering and backlog generation through a multi-phase conversational workflow.
-- **Execution dashboard**: Start/stop/pause orchestrators, view job status, stream live agent logs via WebSocket.
+- **Execution dashboard**: Start/stop/pause orchestrators, view job status, stream live agent logs via WebSocket. The planning view includes a `ParallelLogViewer` that streams stdout/stderr from multiple in-flight jobs in parallel so you can watch several agents work side by side.
 - **User management**: Authentication, user accounts, groups, and role-based access control.
 - **Settings**: Application-wide settings including theme customization and security toggle.
 - **Database**: SQLite via `better-sqlite3` for all persistent state.

@@ -1,5 +1,5 @@
 type WsLike = {
-    on(event: string, handler: (...args: unknown[]) => void): void;
+    on?(event: string, handler: (...args: unknown[]) => void): void;
     send(payload: string): void;
     close(): void;
     readyState: number;
@@ -25,21 +25,15 @@ class WebSocketManager {
     register(key: ClientKey, ws: WsLike): void {
         if (!this.clients.has(key)) {
             this.clients.set(key, new Set());
-        } else {
-            for (const existingWs of this.clients.get(key)!) {
-                this.keyByWs.delete(existingWs);
-                try { existingWs.close(); } catch { /* ignore */ }
-            }
-            this.clients.get(key)!.clear();
         }
         this.clients.get(key)!.add(ws);
         this.keyByWs.set(ws, key);
 
-        ws.on('close', () => {
+        ws.on?.('close', () => {
             this.unregister(ws);
         });
 
-        ws.on('error', (err: unknown) => {
+        ws.on?.('error', (err: unknown) => {
             console.error(`[WS] Error for key=${key}:`, (err as Error)?.message);
             this.unregister(ws);
         });
