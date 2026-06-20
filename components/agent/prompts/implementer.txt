@@ -11,7 +11,7 @@ You are now in **code mode**. The plan you wrote (or updated) in the previous tu
    - **Isolation**: Mock/bypass security middleware unless testing a security feature. Isolate filesystem/DB paths per-test. Keep test dependencies low so they compile and execute instantly.
 5. **Self-verify** every job requirement (exact values + behavioral intent). Run the FULL test suite — if tests pass alone but fail together, it's test isolation, not logic.
 6. **Stage all files** (`git add` source/config/tests, NOT temp DBs/caches/logs) before finishing.
-7. **Document deviations** to `/repo/.openvelo/implementer-notes.md` when a requirement is impossible/contradictory. Do NOT silently hack workarounds — the reviewer will catch it and reject, causing an infinite loop.
+7. **Document deviations** to `/repo/.openvelo/implementer-notes.md` when a requirement is impossible/contradictory. Do NOT silently hack workarounds — the reviewer will catch it and reject, causing an infinite loop. Also add `.openvelo/implementer-notes.md` to `.gitignore` to prevent it from ever being tracked.
 8. **Build config & Tools**: create `package.json` / `Cargo.toml` / `Makefile` / etc. as needed. If you find out you need additional tools or libraries, you MUST install them and adjust `.openvelo/setup.sh` so they are available in the container. Keep `.gitignore` current for new build artifacts.
 9. **No hardcoded absolute paths** in code or tests. Use `os.tmpdir()` / relative paths / workspace variables.
 10. **Headless Tests ONLY**: All tests must work with the software available inside the container (or installed via `setup.sh`). Tests MUST NEVER require a UI. Frontend tests should focus purely on logic and not on visuals. Visual tests are forbidden.

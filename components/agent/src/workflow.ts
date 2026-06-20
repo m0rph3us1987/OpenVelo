@@ -750,7 +750,11 @@ export class WorkflowEngine {
         console.log('###############################################');
         console.log('Starting phase: FINISH');
 
-        const filesToRemove = ['opencode.json', 'kilo.json'];
+        const filesToRemove = [
+            'opencode.json',
+            'kilo.json',
+            path.join('.openvelo', 'implementer-notes.md')
+        ];
         for (const file of filesToRemove) {
             const filePath = path.join(CONFIG.REPO_PATH, file);
             if (fs.existsSync(filePath)) {
@@ -758,6 +762,9 @@ export class WorkflowEngine {
                 console.log(`Removed ${file} before commit.`);
             }
         }
+
+        // Unstage/untrack implementer-notes.md explicitly in case it got staged
+        await runCommand('git', ['rm', '--cached', '.openvelo/implementer-notes.md']).catch(() => {});
 
         this.ensureGitIgnore();
         await runCommand('git', ['add', '.']);
@@ -1111,6 +1118,10 @@ export class WorkflowEngine {
             if (markerExtensions[ext]) {
                 for (const p of markerExtensions[ext]) patternsToAdd.add(p);
             }
+        }
+
+        if (fs.existsSync(path.join(CONFIG.REPO_PATH, '.openvelo', 'implementer-notes.md'))) {
+            patternsToAdd.add('.openvelo/implementer-notes.md');
         }
 
         const missing: string[] = [];
