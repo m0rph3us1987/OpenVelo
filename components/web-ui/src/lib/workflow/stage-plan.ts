@@ -10,9 +10,11 @@ import {
   getPlanJobs,
   deletePlanJobsByChatId,
   deletePlanDataByChatId,
-  updateChatSession,
   updatePlanJobStatus,
-  updatePlanJobLogs
+  updatePlanJobLogs,
+  insertPlanBlock,
+  deletePlanBlocksByChatId,
+  getChatMessages
 } from '@/lib/db';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { transitionTo } from './index';
@@ -20,8 +22,16 @@ import { stageWsManager } from '@/lib/stage-ws-manager';
 import { loggerService } from '@/lib/logger-service';
 import { getSkillsDir } from '@/lib/skills';
 
+interface DiscoveredBlock {
+  index: number;
+  title: string;
+  description: string;
+}
+
 interface DiscoveredJob {
   index: number;
+  block_index?: number;
+  block_sequence?: number;
   title: string;
   description: string;
   line_mapping: string;
@@ -30,6 +40,7 @@ interface DiscoveredJob {
 interface DiscoveryManifest {
   build_cmd: string;
   test_cmd: string;
+  blocks?: DiscoveredBlock[];
   jobs: DiscoveredJob[];
 }
 
@@ -158,6 +169,9 @@ export async function handlePlan(chatId: number): Promise<void> {
 async function handleDiscovery(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
   loggerService.appendVerbose(chatId, 'workflow:plan', `Stage 1: Job Discovery`);
 
+  const chat = getChatSession(chatId);
+  if (!chat) return;
+
   const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
   await client.ensureStarted().catch((err) => {
     loggerService.appendVerbose(chatId, 'workflow:plan', `Server start failed: ${err.message}`);
@@ -179,11 +193,21 @@ async function handleDiscovery(chatId: number, chatDir: string, repoDir: string,
     repoContext = fs.readFileSync(repoContextPath, 'utf-8');
   }
 
-  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
-  if (!fs.existsSync(requirementPath)) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
+  let specContext: string;
+  if (chat.mode === 'requirement') {
+    const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
+    if (fs.existsSync(requirementPath)) {
+      specContext = fs.readFileSync(requirementPath, 'utf-8');
+    } else {
+      loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
+      transitionTo(chatId, 'plan', 'error');
+      return;
+    }
+  } else {
+    const messages = getChatMessages(chatId);
+    specContext = messages
+      .map(m => m.role === 'system' ? `Q: ${m.message}` : `A: ${m.message}`)
+      .join('\n');
   }
 
   const promptTemplate = fs.readFileSync(
@@ -195,7 +219,7 @@ async function handleDiscovery(chatId: number, chatDir: string, repoDir: string,
     .replace(/{CHAT_DIR}/g, chatDir)
     .replace(/{REPO_DIR}/g, repoDir)
     .replace(/{REPO_CONTEXT}/g, repoContext)
-    .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
+    .replace(/{SPEC_CONTEXT}/g, specContext)
     .replace(/{SKILLS_DIR}/g, getSkillsDir());
 
   loggerService.appendVerbose(chatId, 'workflow:plan', `Sending job discovery prompt`);
@@ -229,13 +253,31 @@ async function handleDiscovery(chatId: number, chatDir: string, repoDir: string,
     );
 
     deletePlanJobsByChatId(chatId);
+    deletePlanBlocksByChatId(chatId);
+
+    const blockIdMap = new Map<number, number>();
+    if (parsed.blocks && Array.isArray(parsed.blocks)) {
+      for (const block of parsed.blocks) {
+        const blockDbId = insertPlanBlock({
+          chat_id: chatId,
+          block_index: block.index,
+          title: block.title,
+          description: block.description
+        });
+        blockIdMap.set(block.index, blockDbId);
+      }
+    }
+
     for (const job of parsed.jobs) {
+      const blockDbId = job.block_index !== undefined ? (blockIdMap.get(job.block_index) || null) : null;
       insertPlanJob({
         chat_id: chatId,
         job_index: job.index,
         title: job.title,
         description: job.description,
-        requirement_line_mapping: job.line_mapping
+        requirement_line_mapping: job.line_mapping,
+        block_id: blockDbId,
+        block_sequence: job.block_sequence ?? 0
       });
     }
 
@@ -273,6 +315,9 @@ async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promi
 
 async function handleGeneration(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
   loggerService.appendVerbose(chatId, 'workflow:plan', `Stage 2: Job Specification Generation`);
+
+  const chat = getChatSession(chatId);
+  if (!chat) return;
 
   const jobs = getPlanJobs(chatId);
   if (jobs.length === 0) {
@@ -314,11 +359,21 @@ async function handleGeneration(chatId: number, chatDir: string, repoDir: string
     repoContext = fs.readFileSync(repoContextPath, 'utf-8');
   }
 
-  const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
-  if (!fs.existsSync(requirementPath)) {
-    loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
-    transitionTo(chatId, 'plan', 'error');
-    return;
+  let specContext: string;
+  if (chat.mode === 'requirement') {
+    const requirementPath = path.join(chatDir, 'REQUIREMENT.md');
+    if (fs.existsSync(requirementPath)) {
+      specContext = fs.readFileSync(requirementPath, 'utf-8');
+    } else {
+      loggerService.appendVerbose(chatId, 'workflow:plan', `REQUIREMENT.md not found`);
+      transitionTo(chatId, 'plan', 'error');
+      return;
+    }
+  } else {
+    const messages = getChatMessages(chatId);
+    specContext = messages
+      .map(m => m.role === 'system' ? `Q: ${m.message}` : `A: ${m.message}`)
+      .join('\n');
   }
 
   const promptTemplate = fs.readFileSync(
@@ -345,7 +400,7 @@ async function handleGeneration(chatId: number, chatDir: string, repoDir: string
         .replace(/{CHAT_DIR}/g, chatDir)
         .replace(/{REPO_DIR}/g, repoDir)
         .replace(/{REPO_CONTEXT}/g, repoContext)
-        .replace(/{REQUIREMENT_MD_PATH}/g, requirementPath)
+        .replace(/{SPEC_CONTEXT}/g, specContext)
         .replace(/{SKILLS_DIR}/g, getSkillsDir())
         .replace(/{JOB_INDEX}/g, String(job.job_index))
         .replace(/{JOB_TITLE}/g, job.title)

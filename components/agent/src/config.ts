@@ -28,9 +28,6 @@ export const CONFIG = {
     BUILD_CMD: '',
     TEST_CMD: '',
     STAGING_BRANCH: 'staging',
-    TOOLS_CACHE_DIR: IS_WINDOWS
-        ? path.join(process.env.USERPROFILE || 'C:\\Users\\ContainerAdministrator', '.openvelo', 'toolscache')
-        : '/repo/.openvelo/toolscache',
 };
 
 export interface HandshakeConfig {

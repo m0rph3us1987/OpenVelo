@@ -13,18 +13,20 @@ Before designing any new changes, check if the requested Job is already fully im
 - Explain in the plan exactly which files/methods already contain the implementation.
 - If it is already implemented, do not plan any additional code edits or test creation.
 
-1. **Load Relevant Skills & Architecture:**
-   - **SKILLS**: You MUST read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository). It contains a list of available skill categories for different tasks/purposes. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and incorporate their rules into your architectural plan.
-   - **ARCHITECTURE**: The Agent components use `{{REPO_PATH}}` as the placeholder for the absolute path to the repository. You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure your plan follows established conventions.
-   - The implementer will follow these exact same rules — your plan must be compatible with them.
-2. **Explore & Find:** Look through the repository. First, check `.openvelo/architecture/_INDEX.md` and read the relevant domain documentation to understand the project structure and locate files. To optimize speed on large repositories, avoid broad recursive directory scans or generic grep searches. Rely on the existing architecture documentation to target your exploration only to the components strictly necessary for the job.
-3. **Trace the Data Flow:** Understand how data flows from the frontend/API layer down to the data access and database layers.
-4. **Identify Integration Patterns:**
-   - Where are existing API endpoints defined?
-   - What database/ORM is used?
-   - How are tests written and organized? Locate at least one existing test file to serve as a syntax/mocking template.
-5. **Identify Required Tools & Dependencies:** Check what system tools, libraries, or dependencies will be needed for the project to run. Include them in your plan so the implementer knows to install them and update `.openvelo/setup.sh` accordingly.
-6. **Draft the Plan:** Save your findings and proposed architectural changes as a Markdown file at the exact path `{{PLAN_PATH}}`.
+1. **Analyze the Job & Goal**:
+   - First, read the Job Description and requirements provided at the bottom of this message. Identify the target files, components, and layers (e.g. database schema, API routes, UI screens) that need to be created or modified.
+2. **Consult Architecture Docs (As-Needed)**:
+   - Check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists using your file reading tool.
+   - If it does, read it. Based on the components identified in Step 1, ONLY open and read the linked domain architecture markdown files that are directly relevant to your task. Do NOT read unrelated architecture documents.
+3. **Consult Skills Directory (As-Needed)**:
+   - Read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
+   - Evaluate which skill categories are relevant to the tech stack and layers being modified.
+   - Only open the linked `_INDEX.md` and read specific `SKILL.md` files for those relevant skills. Do NOT load skills unrelated to the current task.
+4. **Explore & Find (Trace Flow)**:
+   - Trace the data flow and identify integration patterns (e.g. API definitions, ORM details, test file structure) in the repository.
+   - Use the architecture and skills you loaded to guide your search. Avoid broad recursive scans.
+5. **Identify Required Tools & Dependencies**: Check what system tools, libraries, or dependencies will be needed for the project to run. Include them in your plan so the implementer knows to install them and update `.openvelo/setup.sh` accordingly.
+6. **Draft the Plan**: Save your findings and proposed architectural changes as a Markdown file at the exact path `{{PLAN_PATH}}`.
    - **CRITICAL WARNING:** You MUST write the plan file to the exact path specified by `{{PLAN_PATH}}`. DO NOT write the plan to `/root/.local/share/kilo/plans/` or any other directory. Writing the plan to any path other than `{{PLAN_PATH}}` will prevent the workflow engine from finding it and will cause the entire process to fail.
    - This path `{{PLAN_PATH}}` is pre-created and writable for you. If the file already exists from a previous attempt, overwrite it with the updated plan. Always use the same path across attempts.
 7. When drafting the plan, use instructions from skills where/when appropriate.
@@ -36,8 +38,8 @@ Kilo `todowrite` tool. Populating it is **required** so the user
 sees your progress during this (often long) investigation.
 
 Before you start, call `todowrite` once with one todo per major
-phase of your work (e.g., "Load SKILLS", "Load architecture",
-"Investigate <area 1>", "Investigate <area 2>", "Identify integration
+phase of your work (e.g., "Analyze Job & Goal", "Load architecture",
+"Load SKILLS", "Investigate codebase", "Identify integration
 patterns", "Draft plan"). All items start with `status: "pending"`.
 
 As you progress through the phases, call `todowrite` again to mark

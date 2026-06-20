@@ -74,7 +74,7 @@ function createTables(db: Database.Database): void {
     INSERT OR IGNORE INTO models (project_id, provider, model_name) VALUES (1, 'openai', 'gpt-4');
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify')),
+      mode TEXT NOT NULL CHECK(mode IN ('plan', 'requirement')),
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       stage TEXT NOT NULL DEFAULT 'init',
@@ -140,10 +140,10 @@ describe('upload-requirement endpoint', () => {
     closeDb();
   });
 
-  it('POST /api/chats/:chatId/upload-requirement with .md file saves as ORIGINAL_REQUIREMENT.md and returns 200', async () => {
+  it('POST /api/chats/:chatId/upload-requirement with .md file saves as REQUIREMENT.md and returns 200', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
     `).run();
 
     const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
@@ -159,31 +159,31 @@ describe('upload-requirement endpoint', () => {
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body, { success: true });
 
-    const savedPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    const savedPath = path.join(chatDir, 'REQUIREMENT.md');
     assert.strictEqual(fs.existsSync(savedPath), true);
     assert.strictEqual(fs.readFileSync(savedPath, 'utf-8'), fileContent);
   });
 
-  it('POST /api/chats/:chatId/upload-requirement with .txt file saves as ORIGINAL_REQUIREMENT.md and returns 200', async () => {
+  it('POST /api/chats/:chatId/upload-requirement with .txt file saves as REQUIREMENT.md and returns 200', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (11, 'requirement', 1, 'Test Chat', 'verify', 'upload')
     `).run();
 
-    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
+    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-11');
     fs.mkdirSync(chatDir, { recursive: true });
     tempDirs.push(chatDir);
 
     const fileContent = 'My requirement content.';
     const request = supertest(app);
     const res = await request
-      .post('/api/chats/1/upload-requirement')
+      .post('/api/chats/11/upload-requirement')
       .attach('requirement', Buffer.from(fileContent), { filename: 'myreq.txt' });
 
     assert.strictEqual(res.status, 200);
     assert.deepStrictEqual(res.body, { success: true });
 
-    const savedPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    const savedPath = path.join(chatDir, 'REQUIREMENT.md');
     assert.strictEqual(fs.existsSync(savedPath), true);
     assert.strictEqual(fs.readFileSync(savedPath, 'utf-8'), fileContent);
   });
@@ -191,7 +191,7 @@ describe('upload-requirement endpoint', () => {
   it('POST /api/chats/:chatId/upload-requirement with invalid extension returns 400', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
     `).run();
 
     const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
@@ -206,14 +206,14 @@ describe('upload-requirement endpoint', () => {
     assert.strictEqual(res.status, 400);
     assert.deepStrictEqual(res.body, { error: 'Only .md and .txt files are accepted' });
 
-    const savedPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    const savedPath = path.join(chatDir, 'REQUIREMENT.md');
     assert.strictEqual(fs.existsSync(savedPath), false);
   });
 
   it('POST /api/chats/:chatId/upload-requirement with file exceeding size limit returns 413', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
     `).run();
 
     const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
@@ -229,14 +229,14 @@ describe('upload-requirement endpoint', () => {
     assert.strictEqual(res.status, 413);
     assert.strictEqual(res.body.error, 'File too large');
 
-    const savedPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    const savedPath = path.join(chatDir, 'REQUIREMENT.md');
     assert.strictEqual(fs.existsSync(savedPath), false);
   });
 
   it('POST /api/chats/:chatId/upload-requirement with no file returns 400', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
     `).run();
 
     const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
@@ -254,61 +254,165 @@ describe('upload-requirement endpoint', () => {
 
   it('POST /api/chats/:chatId/upload-requirement with wrong field name returns 400', async () => {
     db.prepare(`
+       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
+       VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
+     `).run();
+
+     const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
+     fs.mkdirSync(chatDir, { recursive: true });
+     tempDirs.push(chatDir);
+
+     const request = supertest(app);
+     const res = await request
+       .post('/api/chats/1/upload-requirement')
+       .attach('wrongField', Buffer.from('some content'), { filename: 'test.md' });
+
+     assert.strictEqual(res.status, 400);
+     assert.strictEqual(res.body.error, 'No file uploaded');
+   });
+
+   it('POST /api/chats/:chatId/upload-requirement with non-existent chatId returns 404', async () => {
+     const request = supertest(app);
+     const res = await request
+       .post('/api/chats/9999/upload-requirement')
+       .attach('requirement', Buffer.from('some content'), { filename: 'test.md' });
+
+     assert.strictEqual(res.status, 404);
+     assert.deepStrictEqual(res.body, { error: 'Chat session not found' });
+   });
+
+   it('POST /api/chats/:chatId/upload-requirement without project access returns 403', async () => {
+     db.prepare(`UPDATE ui_settings SET value = 'true' WHERE key = 'security_enabled'`).run({});
+     const result = db.prepare(`INSERT INTO users (username, password_hash, role, enabled) VALUES ('regular', 'hash', 'user', 1)`).run({});
+     const regularUserId = result.lastInsertRowid as number;
+     const secret = getSessionSecret();
+     const token = await signJwt({ userId: regularUserId, username: 'user', role: 'user' }, secret);
+
+     const nonAdminApp = express();
+     nonAdminApp.use(express.json());
+     nonAdminApp.use((req, _res, next) => {
+       req.user = { id: regularUserId, username: 'user', role: 'user', enabled: true };
+       next();
+     });
+     nonAdminApp.set('upload', upload);
+     nonAdminApp.use('/api/chats', chatsRouter);
+
+     db.prepare(`
+       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
+       VALUES (1, 'requirement', 1, 'Test Chat', 'verify', 'upload')
+     `).run();
+
+     const request = supertest(nonAdminApp);
+     const res = await request
+       .post('/api/chats/1/upload-requirement')
+       .set('Cookie', `openvelo-token=${token}`)
+       .attach('requirement', Buffer.from('some content'), { filename: 'test.md' });
+
+    assert.ok(res.status === 403 || res.status === 401, `Expected 403 or 401 but got ${res.status}: ${JSON.stringify(res.body)}`);
+  });
+
+  it('POST /api/chats/:chatId/upload-requirement in requirement mode saves as REQUIREMENT.md and transitions to requirement/requirement', async () => {
+    db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (2, 'requirement', 1, 'Req Chat', 'verify', 'upload')
     `).run();
 
-    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-1');
+    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-2');
+    fs.mkdirSync(chatDir, { recursive: true });
+    tempDirs.push(chatDir);
+
+    const fileContent = '# My Requirement\n\nPlan from this.';
+    const request = supertest(app);
+    const res = await request
+      .post('/api/chats/2/upload-requirement')
+      .attach('requirement', Buffer.from(fileContent), { filename: 'myreq.md' });
+
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body, { success: true });
+
+    const savedPath = path.join(chatDir, 'REQUIREMENT.md');
+    assert.strictEqual(fs.existsSync(savedPath), true);
+    assert.strictEqual(fs.readFileSync(savedPath, 'utf-8'), fileContent);
+
+    const origPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    assert.strictEqual(fs.existsSync(origPath), false);
+
+    const updated = db.prepare('SELECT stage, sub_stage, mode FROM chat_sessions WHERE id = 2').get() as { stage: string; sub_stage: string; mode: string };
+    assert.strictEqual(updated.stage, 'requirement');
+    assert.strictEqual(updated.sub_stage, 'requirement');
+    assert.strictEqual(updated.mode, 'requirement');
+  });
+
+  it('POST /api/chats/:chatId/upload-requirement with mode=plan in verify/upload returns 409', async () => {
+    db.prepare(`
+      INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
+      VALUES (3, 'plan', 1, 'Plan Chat', 'verify', 'upload')
+    `).run();
+
+    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-3');
     fs.mkdirSync(chatDir, { recursive: true });
     tempDirs.push(chatDir);
 
     const request = supertest(app);
     const res = await request
-      .post('/api/chats/1/upload-requirement')
-      .attach('wrongField', Buffer.from('some content'), { filename: 'test.md' });
-
-    assert.strictEqual(res.status, 400);
-    assert.strictEqual(res.body.error, 'No file uploaded');
-  });
-
-  it('POST /api/chats/:chatId/upload-requirement with non-existent chatId returns 404', async () => {
-    const request = supertest(app);
-    const res = await request
-      .post('/api/chats/9999/upload-requirement')
+      .post('/api/chats/3/upload-requirement')
       .attach('requirement', Buffer.from('some content'), { filename: 'test.md' });
 
-    assert.strictEqual(res.status, 404);
-    assert.deepStrictEqual(res.body, { error: 'Chat session not found' });
+    assert.strictEqual(res.status, 409);
+    assert.strictEqual(res.body.error, 'Upload is only supported in requirement mode');
   });
 
-  it('POST /api/chats/:chatId/upload-requirement without project access returns 403', async () => {
-    db.prepare(`UPDATE ui_settings SET value = 'true' WHERE key = 'security_enabled'`).run({});
-    const result = db.prepare(`INSERT INTO users (username, password_hash, role, enabled) VALUES ('regular', 'hash', 'user', 1)`).run({});
-    const regularUserId = result.lastInsertRowid as number;
-    const secret = getSessionSecret();
-    const token = await signJwt({ userId: regularUserId, username: 'user', role: 'user' }, secret);
-
-    const nonAdminApp = express();
-    nonAdminApp.use(express.json());
-    nonAdminApp.use((req, _res, next) => {
-      req.user = { id: regularUserId, username: 'user', role: 'user', enabled: true };
-      next();
-    });
-    nonAdminApp.set('upload', upload);
-    nonAdminApp.use('/api/chats', chatsRouter);
-
+  it('POST /api/chats/:chatId/upload-requirement with wrong substage returns 400', async () => {
     db.prepare(`
       INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
-      VALUES (1, 'verify', 1, 'Test Chat', 'verify', 'upload')
+      VALUES (4, 'requirement', 1, 'Req Chat', 'init', '')
     `).run();
 
-    const request = supertest(nonAdminApp);
+    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-4');
+    fs.mkdirSync(chatDir, { recursive: true });
+    tempDirs.push(chatDir);
+
+    const request = supertest(app);
     const res = await request
-      .post('/api/chats/1/upload-requirement')
-      .set('Cookie', `openvelo-token=${token}`)
+      .post('/api/chats/4/upload-requirement')
       .attach('requirement', Buffer.from('some content'), { filename: 'test.md' });
 
-    assert.ok(res.status === 403 || res.status === 401, `Expected 403 or 401 but got ${res.status}: ${JSON.stringify(res.body)}`);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'Chat is not in the upload substage');
+  });
+
+  it('POST /api/chats/:chatId/upload-requirement with empty buffer returns 400', async () => {
+    db.prepare(`
+      INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
+      VALUES (5, 'requirement', 1, 'Req Chat', 'verify', 'upload')
+    `).run();
+
+    const chatDir = path.join(process.env.OPENVELO_TEMP_DATA_PATH || path.join(process.cwd(), 'temp_data'), 'chats', '1-5');
+    fs.mkdirSync(chatDir, { recursive: true });
+    tempDirs.push(chatDir);
+
+    const request = supertest(app);
+    const res = await request
+      .post('/api/chats/5/upload-requirement')
+      .attach('requirement', Buffer.alloc(0), { filename: 'empty.md' });
+
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.error, 'Empty file');
+  });
+
+  it('POST /api/chats/:chatId/upload-requirement in requirement mode with missing chatDir returns 404', async () => {
+    db.prepare(`
+      INSERT OR IGNORE INTO chat_sessions (id, mode, project_id, name, stage, sub_stage)
+      VALUES (6, 'requirement', 1, 'Req Chat', 'verify', 'upload')
+    `).run();
+
+    const request = supertest(app);
+    const res = await request
+      .post('/api/chats/6/upload-requirement')
+      .attach('requirement', Buffer.from('content'), { filename: 'test.md' });
+
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(res.body.error, 'Chat directory not found');
   });
 });
 
@@ -340,6 +444,6 @@ describe('getHandler dispatch', () => {
     assert.strictEqual(workflowModule.getHandler('final_assessment', 'user'), workflowModule.handleFinalAssessment);
     assert.strictEqual(workflowModule.getHandler('requirement', ''), workflowModule.handleRequirement);
     assert.strictEqual(workflowModule.getHandler('plan', ''), workflowModule.handlePlan);
-    assert.strictEqual(workflowModule.getHandler('quick_story', ''), workflowModule.handleQuickStory);
+    assert.strictEqual(workflowModule.getHandler('quick_story', ''), null);
   });
 });

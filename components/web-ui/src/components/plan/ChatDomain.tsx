@@ -4,6 +4,7 @@ import { useStageWebSocket } from '@/hooks/useStageWebSocket';
 import { TextLog } from '@/components/ui/text-log';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { AlertCircle } from 'lucide-react';
 
 interface FlatQuestion {
   domainId: number;
@@ -35,6 +36,7 @@ export function ChatDomain({ chat, onHeaderInfo, viewOnly, overrideSubStage }: C
     const titleMap: Record<string, string> = {
       'plan': 'Planning domains...',
       'quiz': 'Quiz',
+      'error': 'Error',
     };
     let subtitle = titleMap[subStage] ?? 'Planning domains...';
 
@@ -106,6 +108,31 @@ export function ChatDomain({ chat, onHeaderInfo, viewOnly, overrideSubStage }: C
 
   if (subStage === 'quiz') {
     return <QuizView chat={chat} viewOnly={viewOnly} />;
+  }
+
+  if (subStage === 'error') {
+    const handleRetry = async () => {
+      setActionLoading(true);
+      try {
+        await fetch(`/api/chats/${chat.id}/domain/retry`, { method: 'POST' });
+      } catch (err) {
+        console.error('Failed to retry:', err);
+      } finally {
+        setActionLoading(false);
+      }
+    };
+
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground bg-background">
+        <AlertCircle className="h-10 w-10 text-destructive" />
+        <span>An error occurred during domain planning</span>
+        {!viewOnly && (
+          <Button onClick={handleRetry} variant="outline" disabled={actionLoading}>
+            {actionLoading ? 'Retrying...' : 'Retry'}
+          </Button>
+        )}
+      </div>
+    );
   }
 
   return (

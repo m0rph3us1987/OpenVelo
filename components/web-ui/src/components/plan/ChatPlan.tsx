@@ -132,6 +132,13 @@ export function ChatPlan({ chat, onHeaderInfo, viewOnly, overrideSubStage }: Cha
   return <PlanView chat={chat} viewOnly={viewOnly} />;
 }
 
+interface PlanBlock {
+  id: number;
+  block_index: number;
+  title: string;
+  description: string;
+}
+
 interface PlanJob {
   id: number;
   job_index: number;
@@ -141,10 +148,13 @@ interface PlanJob {
   content: string | null;
   build_cmd: string;
   test_cmd: string;
+  block_id: number | null;
+  block_sequence: number;
 }
 
 function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean }) {
   const [jobs, setJobs] = React.useState<PlanJob[]>([]);
+  const [blocks, setBlocks] = React.useState<PlanBlock[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [buildCmd, setBuildCmd] = React.useState('');
   const [testCmd, setTestCmd] = React.useState('');
@@ -161,13 +171,18 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
 
   const fetchPlanData = async () => {
     try {
-      const res = await fetch(`/api/plan/jobs?chatId=${chat.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data);
+      const [jobsRes, blocksRes] = await Promise.all([
+        fetch(`/api/plan/jobs?chatId=${chat.id}`),
+        fetch(`/api/plan/blocks?chatId=${chat.id}`)
+      ]);
+      if (jobsRes.ok && blocksRes.ok) {
+        const jobsData = await jobsRes.json();
+        const blocksData = await blocksRes.json();
+        setJobs(jobsData);
+        setBlocks(blocksData);
         // Expand first job by default
-        if (data.length > 0) {
-          setExpandedJobs(new Set([data[0].id]));
+        if (jobsData.length > 0) {
+          setExpandedJobs(new Set([jobsData[0].id]));
         }
       }
     } catch (err) {
@@ -289,19 +304,73 @@ function PlanView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean })
       <div className="flex-1 overflow-auto p-6 space-y-4 max-w-4xl mx-auto w-full">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold tracking-tight">Functional Jobs</h2>
-          <span className="text-sm text-muted-foreground">{jobs.length} jobs planned</span>
+          <span className="text-sm text-muted-foreground">
+            {blocks.length > 0 ? `${blocks.length} blocks, ` : ''}
+            {jobs.length} jobs planned
+          </span>
         </div>
 
-        <div className="space-y-3">
-          {jobs.map(job => (
-            <JobCard
-              key={job.id}
-              job={job}
-              isExpanded={expandedJobs.has(job.id)}
-              onToggle={() => toggleJob(job.id)}
-            />
-          ))}
-        </div>
+        {blocks.length > 0 ? (
+          <div className="space-y-6">
+            {blocks.map(block => {
+              const blockJobs = jobs.filter(j => j.block_id === block.id);
+              return (
+                <div key={block.id} className="space-y-3">
+                  <div className="border-b border-border/80 pb-2">
+                    <h3 className="text-base font-bold text-foreground/90 flex items-center gap-2">
+                      <span className="bg-primary/10 text-primary px-2 py-0.5 rounded text-xs font-mono">Block {block.block_index}</span>
+                      {block.title}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-1">{block.description}</p>
+                  </div>
+                  <div className="space-y-3 pl-4 border-l border-border/40">
+                    {blockJobs.map(job => (
+                      <JobCard
+                        key={job.id}
+                        job={job}
+                        isExpanded={expandedJobs.has(job.id)}
+                        onToggle={() => toggleJob(job.id)}
+                      />
+                    ))}
+                    {blockJobs.length === 0 && (
+                      <p className="text-xs text-muted-foreground italic pl-2">No jobs planned in this block.</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            
+            {/* Render any jobs that do not belong to a block */}
+            {jobs.some(j => !j.block_id) && (
+              <div className="space-y-3">
+                <div className="border-b border-border/80 pb-2">
+                  <h3 className="text-base font-bold text-foreground/90">Other / Uncategorized Jobs</h3>
+                </div>
+                <div className="space-y-3 pl-4 border-l border-border/40">
+                  {jobs.filter(j => !j.block_id).map(job => (
+                    <JobCard
+                      key={job.id}
+                      job={job}
+                      isExpanded={expandedJobs.has(job.id)}
+                      onToggle={() => toggleJob(job.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {jobs.map(job => (
+              <JobCard
+                key={job.id}
+                job={job}
+                isExpanded={expandedJobs.has(job.id)}
+                onToggle={() => toggleJob(job.id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       <Dialog open={showRegenConfirm} onOpenChange={setShowRegenConfirm}>

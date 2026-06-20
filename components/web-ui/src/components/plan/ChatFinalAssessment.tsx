@@ -197,20 +197,20 @@ function FinalAssessmentChat({ chat, subStage, viewOnly }: { chat: ChatSession; 
                     onClick={async () => {
                       setTransitioning(true);
                       try {
-                        await fetch('/api/chats/generateRequirement', {
+                        await fetch('/api/chats/generatePlan', {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({ chatId: chat.id }),
                         });
                       } catch (err) {
-                        console.error('Failed to generate requirement:', err);
+                        console.error('Failed to generate plan:', err);
                         setTransitioning(false);
                       }
                     }}
                     disabled={transitioning || subStage === 'system'}
                     className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {transitioning ? 'Starting...' : 'Generate requirement'}
+                    {transitioning ? 'Starting...' : 'Generate plan'}
                   </Button>
                 </div>
               )}

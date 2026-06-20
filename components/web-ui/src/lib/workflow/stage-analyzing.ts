@@ -69,7 +69,7 @@ export async function handleAnalyzing(chatId: number): Promise<void> {
       const repoContextPath = path.join(repoDir, 'REPOSITORY.md');
       if (fs.existsSync(repoContextPath)) {
         loggerService.appendVerbose(chatId, 'workflow:analyzing', 'Done! Transitioning to next stage.');
-        if (chat.mode === 'verify') {
+        if (chat.mode === 'requirement') {
           transitionTo(chatId, 'verify', 'upload');
         } else {
           transitionTo(chatId, 'collecting', 'new');

@@ -11,11 +11,10 @@ REPOSITORY CONTEXT:
 CHAT Q&A HISTORY:
 {CHAT_QA}
 
-SKILLS DIRECTORY: {SKILLS_DIR}
-You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into how you specify the requirements.
-
-ARCHITECTURE:
-You MUST use your file reading tool to check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. If any domain is relevant to your task, read the linked markdown file to ensure you follow the established conventions.
+SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
+First, read the outlines and Q&A history at the bottom of this message to understand the scope.
+- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the functional area being planned, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack described in the Q&A, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 
 ---
 

@@ -10,16 +10,15 @@ First, rely on the REPOSITORY CONTEXT above — it already summarizes the codeba
 REPOSITORY CONTEXT:
 {REPO_CONTEXT}
 
-REQUIREMENT PATH: {REQUIREMENT_MD_PATH}
+SPECIFICATION CONTEXT:
+{SPEC_CONTEXT}
 
-Read the REQUIREMENT.MD file at the path above. This is the authoritative specification for the project.
+Read the SPECIFICATION CONTEXT above. This is the authoritative specification containing the user's requirements for the project. It may contain either a requirements document (like REQUIREMENT.md) or a chronological conversation history.
 
-SKILLS DIRECTORY: {SKILLS_DIR}
-You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into how you decompose jobs.
-
-ARCHITECTURE:
-You MUST use your file reading tool to check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
-
+SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
+Before analyzing skills or architecture, read the SPECIFICATION CONTEXT above to understand the system features to plan.
+- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the scope of features described in the SPECIFICATION CONTEXT, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack being planned, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 The implementing agent will follow these skills and architectural rules — your job breakdown must be compatible.
 
 ---
@@ -32,24 +31,42 @@ For each job:
 1. Assign a sequential `index` starting at 1.
 2. Provide a concise `title`.
 3. Provide a one-sentence `description` of what this job delivers.
-4. Provide a `line_mapping` string specifying which exact lines or line ranges of the requirement document contain the specification details for this job (e.g. "Lines 12-45, 89-104").
+4. Provide a `line_mapping` string specifying which topics or questions in the chat history contain the specifications for this job (e.g. "Q&A regarding project configuration", "Final Assessment regarding avatar size validation").
 
 Also produce `build_cmd` and `test_cmd` for this project.
 
 ---
 
-## JOB RULES
+## JOB PLANNING RULES
 
-### What is a job?
-A job represents a vertical functional block of value (e.g., Auth & Session Management, Job Execution Engine, Data Visualization Dashboard). Jobs must represent end-to-end, logically isolated slices of user-facing or system functionality, rather than horizontal technical layers. 
+### 1. Decompose by User-Facing Views and Functions (Non-Technical UI/UX Flow)
+Decompose the project into sequential, independent, user-facing views, screens, dialogs, or logical user interactions that are added onto the stack of functionalities step-by-step.
+- **CRITICAL**: Do NOT group multiple distinct views, pages, dialogs, or screens together into a single complex job. Each distinct view or user-facing interaction flow must be its own independent job (e.g., Job 1: Project Scaffold, Job 2: Login View, Job 3: Main Dashboard View, Job 4: Account List View, Job 5: Account Details Card View).
+- **CLI / Command Line Applications**: For CLI (command line) or TUI (terminal UI) applications, treat specific CLI commands, subcommands, interactive prompt flows/wizards, or output formatters as the "views" (e.g., Job 1: Scaffold CLI parser and command router, Job 2: Implement 'login' command, Job 3: Implement 'users list' command table formatter).
+- **Libraries / SDKs / Logic Packages**: For libraries or reusable logic packages that do not have a user interface, treat a cohesive set of functions or methods that implement a specific functional block (e.g., Job 1: Scaffold library package structure, Job 2: Implement HMAC cryptographic signing block, Job 3: Implement CSV file parser block) exactly like a UI component/view.
+- **End-to-End View/Command/Block Implementation**: For a given view, screen, dialog, CLI command, or library block, implement all its UI controls/options, layout/formatting, user interactions, functions, and the backend/logic/storage needed for *that specific component* in a single job. Do NOT split a single feature's implementation into separate front-end vs. back-end/DB jobs.
+- **NO Complex/Technical Grouping**: Do not group separate user-facing components by technical layers (e.g. putting all database schemas, backend services, or cross-view wiring in separate jobs). Instead, each job should build one user-facing functionality end-to-end on top of the existing stack of functionalities.
+- **Keep Jobs Focused**: Decompose features into small, focused, easily digestible jobs.
 
-Do NOT split jobs into purely horizontal layers (e.g., SharedLayer, Backend, Frontend). A single functional job (e.g., "Implement login page and auth") must encompass all layers (database schema, API endpoints, and frontend components) needed to deliver that block.
+### 2. Sequential Dependencies (Strict Sequence)
+All jobs must execute strictly **sequentially** (one after the other, in a single-threaded queue). Ensure the overall `index` is a flat, strictly ordered sequence from 1 to N.
 
-### ABSOLUTE TESTING & QA PROHIBITION (CRITICAL)
-You MUST NOT generate a dedicated "Testing" job, "QA" job, or any job whose purpose is testing, verification, test automation, or test suite setup. 
-- Even if the requirement document contains a major goal or section dedicated to testing, test coverage, or verification (e.g. "Goal 6: Automated Verification"), you **MUST completely ignore it** when planning jobs.
-- Do not create any jobs for Vitest, Jest, unit tests, integration tests, or component tests.
-- Testing is handled automatically by the implementing agent for each task. There is no need for test or QA jobs. Do not plan for them.
+### GREENFIELD PROJECTS & PROJECT SCAFFOLDING (CRITICAL)
+If the repository context indicates that this is a greenfield project (e.g. empty repository or brand new/minimal directory structure), the very first job (Index 1) MUST be about project scaffolding, monorepo bootstrapping, and setting up the project structure.
+
+### USER-ORIENTED DESCRIPTIONS (CRITICAL)
+Describe each job from the perspective of a user explaining what they want to a coding agent. Keep descriptions user-oriented, focusing on:
+- What controls, elements, CLI commands, prompts, or library functions are visible/interactive/callable and what they do.
+- What happens when clicking on different components, entering CLI flags, invoking library methods, or when certain actions are performed.
+- What should happen when, in plain terms.
+- Do NOT prescribe coding-level implementation details (such as specific filenames, class structures, directory structures, design patterns, or target file paths).
+- **SPECIFIC TECHNICAL BOUNDARIES**: You MUST include explicit database schemas, tables, fields, API endpoints, REST route structures, library interfaces/inputs/outputs, or communication protocols if they were discussed or are necessary to define job boundaries. Make sure these boundaries are precise so sequential agents can implement them without interface drift.
+
+### ABSOLUTE TESTING, QA, & DOCUMENTATION PROHIBITION (CRITICAL)
+You MUST NOT generate any dedicated "Testing" job, "QA" job, "Documentation" job, or any job whose purpose is testing, verification, test automation, test suite setup, or documentation.
+- Testing and documentation are handled autonomously by the workflow execution pipeline. Do not plan any jobs for them.
+- Specifically, do NOT create any jobs for "writing tests", "creating tests", "generating test suites", "QA", or "updating documentation" (including files in `.openvelo/architecture/` or `ARCHITECTURE.md`).
+- **CRITICAL**: Even if the conversation history explicitly mentions writing tests or updating documentation, you **MUST completely ignore them** when planning jobs. Do NOT generate jobs for them.
 
 ---
 
@@ -64,7 +81,7 @@ Your response text must contain ONLY a single JSON object. No preamble, no posta
   "jobs": [
     {
       "index": 1,
-      "title": "concise job title",
+      "title": "concise job title (e.g., Unit Management)",
       "description": "one-sentence summary of what this job delivers",
       "line_mapping": "Lines X-Y, Z-W"
     }

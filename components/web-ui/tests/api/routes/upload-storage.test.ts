@@ -74,7 +74,7 @@ function createTables(db: Database.Database): void {
     INSERT OR IGNORE INTO models (project_id, provider, model_name) VALUES (1, 'openai', 'gpt-4');
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify')),
+      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify', 'requirement')),
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       stage TEXT NOT NULL DEFAULT 'init',

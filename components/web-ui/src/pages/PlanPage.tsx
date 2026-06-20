@@ -10,6 +10,7 @@ import { ChatFinalAssessment } from '@/components/plan/ChatFinalAssessment';
 import { ChatRequirement } from '@/components/plan/ChatRequirement';
 import { ChatPlan } from '@/components/plan/ChatPlan';
 import { ChatVerify } from '@/components/plan/ChatVerify';
+import { ChatRequirementUpload } from '@/components/plan/ChatRequirementUpload';
 import { PlanHeader } from '@/components/plan/PlanHeader';
 import type { ChatSession, Project } from '@/lib/types';
 
@@ -35,6 +36,29 @@ const STAGE_COMPONENTS: Record<string, React.ComponentType<{ chat: ChatSession; 
   'verify': ChatVerify,
 };
 
+const STAGE_DISPATCH: { component: React.ComponentType<{ chat: ChatSession; onHeaderInfo?: (info: HeaderInfo) => void; viewOnly?: boolean; overrideSubStage?: string }>; match: (c: ChatSession) => boolean }[] = [
+  { component: ChatRequirementUpload, match: (c) => c.mode === 'requirement' && c.stage === 'verify' && c.sub_stage === 'upload' },
+  { component: ChatVerify,             match: (c) => c.stage === 'verify' && c.sub_stage === 'upload' },
+  { component: ChatInit,               match: (c) => c.stage === 'init' },
+  { component: ChatAnalysis,           match: (c) => c.stage === 'analyzing' },
+  { component: ChatCollecting,         match: (c) => c.stage === 'collecting' },
+  { component: ChatDomain,             match: (c) => c.stage === 'domain' },
+  { component: ChatFinalAssessment,    match: (c) => c.stage === 'final_assessment' },
+  { component: ChatRequirement,        match: (c) => c.stage === 'requirement' },
+  { component: ChatPlan,               match: (c) => c.stage === 'plan' },
+  { component: ChatVerify,             match: (c) => c.stage === 'verify' },
+];
+
+const STAGE_DEFAULTS: Record<string, string> = {
+  'analyzing': 'analyzing',
+  'collecting': 'user',
+  'domain': 'quiz',
+  'final_assessment': 'user',
+  'requirement': 'requirement',
+  'plan': 'plan',
+  'verify': 'satisfied',
+};
+
 export function PlanPage() {
   const { projectId } = useOutletContext<ProjectContext>();
   const [selectedChat, setSelectedChat] = React.useState<ChatSession | null>(null);
@@ -44,7 +68,20 @@ export function PlanPage() {
 
   const isViewingHistory = viewingStage !== null;
   const displayStage = isViewingHistory ? viewingStage.stage : selectedChat?.stage;
-  const SelectedComponent = displayStage ? STAGE_COMPONENTS[displayStage] : null;
+
+  const chatForDispatch = React.useMemo(() => {
+    if (!selectedChat) return null;
+    if (!isViewingHistory) return selectedChat;
+    return {
+      ...selectedChat,
+      stage: viewingStage.stage,
+      sub_stage: viewingStage.subStage || STAGE_DEFAULTS[viewingStage.stage] || '',
+    };
+  }, [selectedChat, isViewingHistory, viewingStage]);
+
+  const SelectedComponent = displayStage
+    ? (chatForDispatch ? STAGE_DISPATCH.find((d) => d.match(chatForDispatch))?.component ?? STAGE_COMPONENTS[displayStage] : STAGE_COMPONENTS[displayStage])
+    : null;
 
   const handleStageClick = React.useCallback((stage: string, subStage: string) => {
     if (stage === '') {
@@ -89,13 +126,13 @@ export function PlanPage() {
         />
       </div>
       <div className="flex flex-col h-full overflow-hidden">
-        {SelectedComponent && selectedChat ? (
+        {SelectedComponent && chatForDispatch ? (
           <SelectedComponent
-            key={isViewingHistory ? `${selectedChat.id}-${viewingStage.stage}` : selectedChat.id}
-            chat={selectedChat}
+            key={isViewingHistory ? `${chatForDispatch.id}-${viewingStage.stage}` : chatForDispatch.id}
+            chat={chatForDispatch}
             onHeaderInfo={setHeaderInfo}
             viewOnly={isViewingHistory}
-            overrideSubStage={isViewingHistory ? viewingStage.subStage : undefined}
+            overrideSubStage={isViewingHistory ? (viewingStage.subStage || undefined) : undefined}
           />
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground">

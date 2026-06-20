@@ -23,11 +23,12 @@ import { requireProjectAccess } from '../middleware/auth';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { wsManager } from '@/lib/websocket-manager';
 import { stageWsManager } from '@/lib/stage-ws-manager';
+import type { ChatMode } from '@/lib/types';
 
 export const chatsRouter = Router();
 
 interface ChatCreateBody {
-  mode: 'plan' | 'quick' | 'verify';
+  mode: ChatMode;
   name: string;
   project_id: number;
 }
@@ -49,8 +50,8 @@ chatsRouter.post('/chatCreate', requireProjectAccess, async (req, res) => {
     res.status(400).json({ error: 'mode, name, and project_id are required' });
     return;
   }
-  if (!['plan', 'quick', 'verify'].includes(mode)) {
-    res.status(400).json({ error: 'mode must be plan, quick, or verify' });
+  if (!['plan', 'requirement'].includes(mode)) {
+    res.status(400).json({ error: 'mode must be plan or requirement' });
     return;
   }
   const chat = createChatSession({ mode, name, project_id });
@@ -234,6 +235,20 @@ chatsRouter.post('/:chatId/verify/retry', requireProjectAccess, (req, res) => {
   res.json({ success: true });
 });
 
+chatsRouter.post('/:chatId/domain/retry', requireProjectAccess, (req, res) => {
+  const { chatId } = req.params;
+  const chat = getChatSession(Number(chatId));
+  if (!chat) {
+    res.status(404).json({ error: 'Chat session not found' });
+    return;
+  }
+
+  updateChatSession(Number(chatId), { running: false });
+  transitionTo(Number(chatId), chat.stage, chat.sub_stage_pre_error);
+
+  res.json({ success: true });
+});
+
 chatsRouter.post('/:chatId/final_assessment/retry', requireProjectAccess, (req, res) => {
   const { chatId } = req.params;
   const chat = getChatSession(Number(chatId));
@@ -339,6 +354,10 @@ chatsRouter.post('/:chatId/upload-requirement', requireProjectAccess, async (req
         res.status(400).json({ error: 'Only .md and .txt files are accepted' });
         return;
       }
+      if (multerErr.code === 'LIMIT_UNEXPECTED_FILE' || err.message === 'Unexpected field') {
+        res.status(400).json({ error: 'No file uploaded' });
+        return;
+      }
       res.status(500).json({ error: 'Upload failed' });
       return;
     }
@@ -351,25 +370,37 @@ chatsRouter.post('/:chatId/upload-requirement', requireProjectAccess, async (req
       return;
     }
 
+    if (file.size <= 0) {
+      res.status(400).json({ error: 'Empty file' });
+      return;
+    }
+
     const chat = getChatSession(chatId);
     if (!chat) {
       res.status(404).json({ error: 'Chat session not found' });
       return;
     }
 
+    if (chat.stage !== 'verify' || chat.sub_stage !== 'upload') {
+      res.status(400).json({ error: 'Chat is not in the upload substage' });
+      return;
+    }
+
+    if (chat.mode !== 'requirement') {
+      res.status(409).json({ error: 'Upload is only supported in requirement mode' });
+      return;
+    }
+
     const chatDir = getChatDir(chatId, chat.project_id);
 
     if (!fs.existsSync(chatDir)) {
-      try {
-        fs.mkdirSync(chatDir, { recursive: true });
-      } catch (mkdirErr) {
-        console.error(`[upload] upload-requirement - failed to create chat directory: ${mkdirErr}`);
-        res.status(500).json({ error: 'Failed to create chat directory' });
-        return;
-      }
+      res.status(404).json({ error: 'Chat directory not found' });
+      return;
     }
 
-    const destPath = path.join(chatDir, 'ORIGINAL_REQUIREMENT.md');
+    const destPath = path.join(chatDir, 'REQUIREMENT.md');
+    const nextStage = 'requirement';
+    const nextSubStage = 'requirement';
     const tmpPath = destPath + '.tmp';
 
     try {
@@ -385,7 +416,7 @@ chatsRouter.post('/:chatId/upload-requirement', requireProjectAccess, async (req
     }
 
     try {
-      transitionTo(chatId, 'verify', 'analysis');
+      transitionTo(chatId, nextStage, nextSubStage);
     } catch (transitionErr) {
       console.error(`[upload] upload-requirement - transitionTo failed: ${transitionErr}`);
       try { fs.unlinkSync(destPath); } catch { /* ignore cleanup error */ }

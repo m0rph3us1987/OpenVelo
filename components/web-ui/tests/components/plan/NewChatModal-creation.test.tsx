@@ -16,6 +16,7 @@ const MODE_OPTIONS: { mode: string; label: string; description: string }[] = [
   { mode: 'plan', label: 'Plan', description: 'Full implementation plan with epics, features, and user stories' },
   { mode: 'quick', label: 'Quick', description: 'Single user story for simple features or bug fixes' },
   { mode: 'verify', label: 'Verify', description: 'Verifies if all the features from the requirement are implemented as per requirement.' },
+  { mode: 'requirement', label: 'Requirement', description: 'Upload a requirement document and generate a plan from it' },
 ];
 
 function TestableNewChatModal({ open, onOpenChange, projectId, onCreated }: NewChatModalProps) {
@@ -62,7 +63,7 @@ function TestableNewChatModal({ open, onOpenChange, projectId, onCreated }: NewC
       });
       if (res.status === 400) {
         const data = await res.json().catch(() => ({}));
-        if (data.error === 'mode must be plan, quick, or verify') {
+        if (data.error === 'mode must be plan, quick, verify, or requirement') {
           setModeError(data.error);
           return;
         }
@@ -353,7 +354,7 @@ describe('NewChatModal form validation and submission', () => {
         const [modeError, setModeError] = React.useState<string | null>(null);
         displayedError = modeError;
         const handleSubmit = async () => {
-          const error = 'mode must be plan, quick, or verify';
+          const error = 'mode must be plan, quick, verify, or requirement';
           setModeError(error);
         };
         return (

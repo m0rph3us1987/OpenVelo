@@ -45,6 +45,149 @@ export function closeDb(): void {
   }
 }
 
+export function migrateChatSessionsMode(db: Database.Database): void {
+  const needsWiden = (() => {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_sessions'").get() as { sql?: string } | undefined;
+    return row?.sql ? row.sql.includes("'quick'") : false;
+  })();
+
+  const needsFkRebuild = db.prepare(`
+    SELECT 1 AS hit FROM sqlite_master
+    WHERE type = 'table'
+      AND (sql LIKE '%chat_sessions__legacy%'
+           OR sql LIKE '%__rebuild_fk%')
+    LIMIT 1
+  `).get() !== undefined;
+
+  if (!needsWiden && !needsFkRebuild) return;
+
+  db.exec(`PRAGMA foreign_keys = OFF`);
+  try {
+    db.transaction(() => {
+      if (needsWiden) {
+        db.exec(`ALTER TABLE chat_sessions RENAME TO chat_sessions__legacy`);
+        db.exec(`
+          CREATE TABLE chat_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode TEXT NOT NULL CHECK(mode IN ('plan', 'requirement')),
+            project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            stage TEXT NOT NULL DEFAULT 'init',
+            sub_stage TEXT NOT NULL DEFAULT '',
+            sub_stage_pre_error TEXT NOT NULL DEFAULT '',
+            running INTEGER NOT NULL DEFAULT 0,
+            error_type TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO chat_sessions (id, mode, project_id, name, stage, sub_stage,
+                                      sub_stage_pre_error, running, error_type,
+                                      created_at, updated_at)
+            SELECT id, CASE WHEN mode IN ('quick', 'verify') THEN 'plan' ELSE mode END, project_id, name, stage, sub_stage,
+                   sub_stage_pre_error, running, error_type,
+                   created_at, updated_at
+            FROM chat_sessions__legacy;
+          DROP TABLE chat_sessions__legacy;
+        `);
+      }
+
+      const childTables = db.prepare(`
+        SELECT m.name AS tbl_name, m.sql AS tbl_sql
+        FROM sqlite_master m
+        WHERE m.type = 'table'
+          AND m.name <> 'chat_sessions'
+          AND m.name NOT LIKE 'sqlite_%'
+          AND m.name NOT LIKE '%\\_\\_rebuild\\_fk' ESCAPE '\\'
+          AND (m.sql LIKE '%chat_sessions__legacy%'
+               OR m.sql LIKE '%__rebuild_fk%')
+      `).all() as Array<{ tbl_name: string; tbl_sql: string }>;
+
+      const rewrite = (sql: string): string => sql
+        .replace(/REFERENCES\s+chat_sessions__legacy\s*\(/gi, 'REFERENCES chat_sessions(')
+        .replace(/REFERENCES\s+"chat_sessions__legacy"\s*\(/gi, 'REFERENCES chat_sessions(')
+        .replace(/("([^"]+)")__rebuild_fk/g, '$1')
+        .replace(/((?:[A-Za-z_][A-Za-z0-9_]*))__rebuild_fk(?![\w])/g, '$1');
+
+      // Phase 1: rename every child table to <name>__rebuild_fk. This breaks
+      // FKs from siblings that point at these tables, but PRAGMA foreign_keys
+      // is OFF so SQLite won't reject the renames.
+      for (const { tbl_name } of childTables) {
+        db.exec(`ALTER TABLE "${tbl_name}" RENAME TO "${tbl_name}__rebuild_fk"`);
+      }
+
+      // Phase 2: recreate every child table in FK-dependency order so a table
+      // that points at another child table is created AFTER the table it points
+      // at already exists with its canonical (non-__rebuild_fk) name. Tables
+      // not in the rebuild set (e.g. projects, users) are considered
+      // pre-existing; the renamed __rebuild_fk tables are NOT considered
+      // pre-existing because their canonical name is in `remaining`.
+      const allTableNames = (db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%\\_\\_rebuild\\_fk' ESCAPE '\\'`
+      ).all() as Array<{ name: string }>).map(r => r.name);
+      const remaining = new Set(childTables.map(c => c.tbl_name));
+      const created = new Set<string>(allTableNames.filter(n => !remaining.has(n)));
+      const sqlByTable = new Map(childTables.map(c => [c.tbl_name, c.tbl_sql]));
+
+      // Extract the set of referenced (parent) table names from a CREATE TABLE
+      // SQL string. Handles both unquoted and double-quoted identifiers, and
+      // applies the same rewrite as Phase 2 so the dependency check sees the
+      // post-rewrite canonical names (chat_sessions, plan_features, ...).
+      const extractRefs = (sql: string): string[] => {
+        const refs: string[] = [];
+        const re = /REFERENCES\s+(?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/gi;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(sql)) !== null) {
+          let name = m[1] ?? m[2];
+          if (name === 'chat_sessions__legacy') name = 'chat_sessions';
+          if (name.endsWith('__rebuild_fk')) name = name.slice(0, -'__rebuild_fk'.length);
+          refs.push(name);
+        }
+        return refs;
+      };
+
+      let safety = childTables.length * childTables.length + 1;
+      while (remaining.size > 0 && safety-- > 0) {
+        let progress = false;
+        for (const tbl_name of [...remaining]) {
+          const rawSql = sqlByTable.get(tbl_name)!;
+          const refs = extractRefs(rawSql);
+          if (refs.every(r => created.has(r))) {
+            const rewrittenSql = rewrite(rawSql);
+            db.exec(rewrittenSql);
+            created.add(tbl_name);
+            remaining.delete(tbl_name);
+            progress = true;
+          }
+        }
+        if (!progress) {
+          throw new Error(`[db] migrateChatSessionsMode: cyclic or unresolvable FK dependencies among ${[...remaining].join(', ')}`);
+        }
+      }
+
+      // Phase 3: copy data from each renamed old table into its new twin, then
+      // drop the renamed old table. The new tables were created in dependency
+      // order so every FK target is now a stable canonical name.
+      for (const { tbl_name } of childTables) {
+        const tempName = `${tbl_name}__rebuild_fk`;
+        const cols = (db.prepare(`PRAGMA table_info("${tempName}")`).all() as Array<{ name: string }>)
+          .map(c => `"${c.name}"`)
+          .join(', ');
+        db.exec(
+          `INSERT INTO "${tbl_name}" (${cols}) SELECT ${cols} FROM "${tempName}"`
+        );
+        db.exec(`DROP TABLE "${tempName}"`);
+      }
+    })();
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ON`);
+  }
+
+  const violations = db.prepare(`PRAGMA foreign_key_check`).all();
+  if (violations.length > 0) {
+    console.warn('[db] foreign_key_check violations after migration:', violations);
+  }
+}
+
 export function initDb(): void {
   const db = getDb();
   db.exec(`
@@ -145,7 +288,7 @@ export function initDb(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify')),
+      mode TEXT NOT NULL CHECK(mode IN ('plan', 'requirement')),
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       stage TEXT NOT NULL DEFAULT 'init',
@@ -283,6 +426,18 @@ export function initDb(): void {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS plan_blocks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+      block_index INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(chat_id, block_index)
+    )
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS plan_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       chat_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
@@ -295,6 +450,8 @@ export function initDb(): void {
       test_cmd TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'pending',
       logs TEXT NOT NULL DEFAULT '',
+      block_id INTEGER REFERENCES plan_blocks(id) ON DELETE SET NULL,
+      block_sequence INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(chat_id, job_index)
     )
@@ -327,6 +484,9 @@ export function initDb(): void {
     `ALTER TABLE plan_jobs ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`,
     `ALTER TABLE plan_jobs ADD COLUMN logs TEXT NOT NULL DEFAULT ''`,
     `ALTER TABLE jobs DROP COLUMN acceptance_criteria`,
+    `CREATE TABLE IF NOT EXISTS plan_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, block_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(chat_id, block_index))`,
+    `ALTER TABLE plan_jobs ADD COLUMN block_id INTEGER REFERENCES plan_blocks(id) ON DELETE SET NULL`,
+    `ALTER TABLE plan_jobs ADD COLUMN block_sequence INTEGER DEFAULT 0`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* ignore */ }
@@ -334,6 +494,12 @@ export function initDb(): void {
   try {
     db.exec(`UPDATE jobs SET depends_on = json_array(depends_on) WHERE depends_on IS NOT NULL AND depends_on NOT LIKE '[%'`);
   } catch { /* ignore */ }
+
+  try {
+    migrateChatSessionsMode(db);
+  } catch (err) {
+    console.warn('[db] migrateChatSessionsMode failed (will retry on next start):', err);
+  }
 }
 
 export function getAllProjects(): Project[] {
@@ -1496,6 +1662,15 @@ export function deletePlanStoriesByChatId(chatId: number): void {
   db.prepare('DELETE FROM plan_stories WHERE chat_id = ?').run(chatId);
 }
 
+export interface PlanBlockRow {
+  id: number;
+  chat_id: number;
+  block_index: number;
+  title: string;
+  description: string;
+  created_at: string;
+}
+
 export interface PlanJobRow {
   id: number;
   chat_id: number;
@@ -1508,6 +1683,8 @@ export interface PlanJobRow {
   test_cmd: string;
   status: string;
   logs: string;
+  block_id: number | null;
+  block_sequence: number;
   created_at: string;
 }
 
@@ -1526,18 +1703,47 @@ export function appendPlanJobLog(id: number, text: string): void {
   db.prepare('UPDATE plan_jobs SET logs = logs || ? WHERE id = ?').run(text, id);
 }
 
+export function insertPlanBlock(data: {
+  chat_id: number;
+  block_index: number;
+  title: string;
+  description: string;
+}): number {
+  const db = getDb();
+  const result = db.prepare(`
+    INSERT INTO plan_blocks (chat_id, block_index, title, description)
+    VALUES (@chat_id, @block_index, @title, @description)
+  `).run(data);
+  return result.lastInsertRowid as number;
+}
+
+export function getPlanBlocks(chatId: number): PlanBlockRow[] {
+  return [];
+}
+
+export function deletePlanBlocksByChatId(chatId: number): void {
+  const db = getDb();
+  db.prepare('DELETE FROM plan_blocks WHERE chat_id = ?').run(chatId);
+}
+
 export function insertPlanJob(data: {
   chat_id: number;
   job_index: number;
   title: string;
   description: string;
   requirement_line_mapping: string;
+  block_id?: number | null;
+  block_sequence?: number;
 }): number {
   const db = getDb();
   const result = db.prepare(`
-    INSERT INTO plan_jobs (chat_id, job_index, title, description, requirement_line_mapping)
-    VALUES (@chat_id, @job_index, @title, @description, @requirement_line_mapping)
-  `).run(data);
+    INSERT INTO plan_jobs (chat_id, job_index, title, description, requirement_line_mapping, block_id, block_sequence)
+    VALUES (@chat_id, @job_index, @title, @description, @requirement_line_mapping, @block_id, @block_sequence)
+  `).run({
+    ...data,
+    block_id: data.block_id ?? null,
+    block_sequence: data.block_sequence ?? 0
+  });
   return result.lastInsertRowid as number;
 }
 
@@ -1565,6 +1771,7 @@ export function deletePlanDataByChatId(chatId: number): void {
   deletePlanFeaturesByChatId(chatId);
   deletePlanEpicsByChatId(chatId);
   deletePlanJobsByChatId(chatId);
+  deletePlanBlocksByChatId(chatId);
 }
 
 export function insertDomain(data: {

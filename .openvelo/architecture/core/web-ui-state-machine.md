@@ -15,6 +15,10 @@ Stages are routed by `getHandler(stage, sub_stage)` in `components/web-ui/src/li
 | `final_assessment` | `''`, `'analysis'`, `'system'`, `'user'`, `'error'` | `plan-final-assessment.md` | `stage-final-assessment.ts` | Pre-plan sanity check. Uses `chat_model`. The `'user'` substage presents the assessment to the human for approval before the `plan` stage. |
 | `verify` | `''`, `'upload'`, `'satisfied'`, `'analysis'`, `'error'` | `verify-analysis.md` | `stage-verify.ts` | The `verify` chat mode. `upload` waits for the user to upload `OLD_REQUIREMENT.md` (via `POST /api/uploads/uploadOldRequirement`). `analysis` runs the analyzer. `satisfied` is terminal (existing requirement already covers the ask). On unsatisfied verdict, transitions to `requirement/requirement` to write a new `REQUIREMENT.md`. All `error` transitions pass an `errorType` option (classified by `verify-error-classifier.ts`). |
 
+## Modes
+
+A `chat_sessions.mode` value of `'plan'`, `'quick'`, `'verify'`, or `'requirement'`. The `'requirement'` mode reuses the `verify` upload branch of the `analyzing` transition (lands at `verify/upload`) and writes a fresh `REQUIREMENT.md` (via `POST /api/chats/:chatId/upload-requirement`) before transitioning to the existing `requirement/requirement` terminal substage. The `analyzing` stage treats `requirement` the same as `verify` (`stage-analyzing.ts`).
+
 ## Retry Endpoints
 Each stage with an `error` sub_stage has a corresponding retry endpoint (sets `running = false`, then `transitionTo(chat.stage, chat.sub_stage_pre_error)`):
 - `POST /api/chats/:chatId/verify/retry`

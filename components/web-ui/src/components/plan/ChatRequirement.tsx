@@ -271,7 +271,7 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
           size="sm"
           onClick={handleGenerate}
         >
-          {chat.mode === 'quick' ? 'Generate job' : 'Generate plan'}
+          Generate plan
         </Button>
       </div>
 

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ClipboardList, Zap, ShieldCheck } from 'lucide-react';
+import { ClipboardList, FileText } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,16 +27,10 @@ const MODE_OPTIONS: {
     icon: ClipboardList,
   },
   {
-    mode: 'quick',
-    label: 'Quick',
-    description: 'Single job for simple features or bug fixes',
-    icon: Zap,
-  },
-  {
-    mode: 'verify',
-    label: 'Verify',
-    description: 'Verifies if all the features from the requirement are implemented as per requirement. Use this mode after the agent has implemented your plan to make sure nothing was left behind.',
-    icon: ShieldCheck,
+    mode: 'requirement',
+    label: 'Requirement',
+    description: 'Upload a requirement document and generate a plan from it',
+    icon: FileText,
   },
 ];
 
@@ -84,7 +78,7 @@ export function NewChatModal({ open, onOpenChange, projectId, onCreated }: NewCh
       });
       if (res.status === 400) {
         const data = await res.json().catch(() => ({}));
-        if (data.error === 'mode must be plan, quick, or verify') {
+        if (data.error === 'mode must be plan or requirement') {
           setModeError(data.error);
           return;
         }
@@ -129,7 +123,7 @@ export function NewChatModal({ open, onOpenChange, projectId, onCreated }: NewCh
 
           <div className="space-y-3">
             <Label>Mode</Label>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {MODE_OPTIONS.map((option) => {
                 const Icon = option.icon;
                 const isSelected = selectedMode === option.mode;

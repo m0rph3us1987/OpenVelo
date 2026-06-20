@@ -5,7 +5,7 @@ The `web-ui` component is the central orchestration cockpit: a frontend React SP
 ## 1. Directory Structure & Key Files
 - `src/` (frontend SPA, Vite):
   - `pages/` — `HomePage`, `LoginPage`, `PlanPage`, `ProjectPage`, `ChangePasswordPage`.
-  - `components/plan/` — per-stage chat UIs (`ChatCollecting`, `ChatDomain`, `ChatPlan`, `ChatRequirement`, `ChatUserstory`, `ChatVerify`, `ChatList`, `ChatInit`, `ChatAnalysis`, `ChatFinalAssessment`, `ParallelLogViewer`, etc.). `ParallelLogViewer` streams live stdout/stderr from multiple in-flight agent containers in the planning view.
+  - `components/plan/` — per-stage chat UIs (`ChatCollecting`, `ChatDomain`, `ChatPlan`, `ChatRequirement`, `ChatUserstory`, `ChatVerify`, `ChatList`, `ChatInit`, `ChatAnalysis`, `ChatFinalAssessment`, `ChatRequirementUpload`, `ParallelLogViewer`, etc.). `ParallelLogViewer` streams live stdout/stderr from multiple in-flight agent containers in the planning view. `ChatRequirementUpload` is mounted by `PlanPage`'s mode-aware `STAGE_DISPATCH` for the `requirement` mode's upload substage (see [../core/requirement-mode.md](../core/requirement-mode.md)).
   - `components/{auth,dashboard,layout,models,projects,settings,theme,ui}/` — supporting UI (see [web-ui-subsystems.md](web-ui-subsystems.md) for the full inventory).
   - `hooks/` — 8 custom state hooks: `useChatListWebSocket`, `useChatWebSocket`, `useJobWebSocket`, `useProjectStatus`, `useStageWebSocket`, `useTheme`, `useWebSocket`, `useWorkItems`.
   - `context/` — `AuthContext`, `ToastContext`.
@@ -55,7 +55,7 @@ SQLite (`better-sqlite3`) with WAL mode and foreign keys enabled.
 
 - **`projects`** — name, port, repo host/url/PAT, docker image, backend, **nine per-phase model fields** (§3), build/test commands, staging branch, poll interval, agent timeout, parallel/retries limits, remove-deleted-containers flag, status, pid.
 - **`jobs`** — execution row. `depends_on` is a JSON array of predecessor job IDs; `feature_id` references `plan_features.id`; `container_id`, `branch`, `retry_count`, `runtime`, `agent_attempt` / `agent_max_retries` reflect live in-flight state. (The pre-kilo `acceptance_criteria` column was dropped in favour of `feature_id`.)
-- **`chat_sessions`** — `mode` (`plan`/`quick`/`verify`), `stage`, `sub_stage`, `sub_stage_pre_error` (saved on every non-error transition so retry endpoints can resume), `error_type` (set on `error` sub_stage), `running` (single-runner lock).
+- **`chat_sessions`** — `mode` (`plan`/`quick`/`verify`/`requirement`), `stage`, `sub_stage`, `sub_stage_pre_error` (saved on every non-error transition so retry endpoints can resume), `error_type` (set on `error` sub_stage), `running` (single-runner lock). The `requirement` mode was added with an in-place CHECK-constraint migration (see [../core/requirement-mode.md](../core/requirement-mode.md)).
 - **`chat_messages`** + **`chat_message_options`** — full transcript (role `user`/`system`) + LLM `options` JSON.
 - **`domains`/`domain_questions`/`domain_answers`** — domain outline + Q&A state.
 - **`requirement_outline`/`requirement_section`** — hierarchical requirement text. `requirement_outline` carries `status` + `logs` columns for live per-row progress streaming.

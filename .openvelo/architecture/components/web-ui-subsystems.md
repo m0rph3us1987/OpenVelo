@@ -63,6 +63,7 @@ Multer config (in `server.ts`): 5 MB max, `.md`/`.txt` only, memory storage.
 | `/api/uploads/chatFiles` | GET | `requireAuth` | List `chatDir/uploads/`. |
 | `/api/uploads/chatFile` | DELETE | `requireAuth` | Delete one uploaded file. |
 | `/api/uploads/uploadOldRequirement` | POST | `requireProjectAccess` | Used by verify mode: saves `chatDir/OLD_REQUIREMENT.md` and transitions to `verify/analysis`. |
+| `/api/chats/:chatId/upload-requirement` | POST | `requireProjectAccess` | Used by `verify` and `requirement` modes (branched on `chat.mode`): for `verify` writes `chatDir/ORIGINAL_REQUIREMENT.md` → `verify/analysis`; for `requirement` writes `chatDir/REQUIREMENT.md` → `requirement/requirement`. Rejects empty/missing files, non-`.md`/`.txt`, and chats not in the correct substage. See [../core/requirement-mode.md](../core/requirement-mode.md). |
 
 ## User & Group Management
 

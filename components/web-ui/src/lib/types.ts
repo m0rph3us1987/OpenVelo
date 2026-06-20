@@ -238,7 +238,7 @@ export interface GroupWithRelations extends Group {
   projects: Project[];
 }
 
-export type ChatMode = 'plan' | 'quick' | 'verify';
+export type ChatMode = 'plan' | 'requirement';
 
 export interface ChatSession {
   id: number;

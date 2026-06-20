@@ -23,37 +23,23 @@ const PLAN_STEPS: StageStep[] = [
   { label: 'Domain', stage: 'domain', subStageNot: 'quiz' },
   { label: 'Quiz', stage: 'domain', subStage: 'quiz', clickable: true },
   { label: 'Final Assessment', stage: 'final_assessment', clickable: true },
-  { label: 'Requirement', stage: 'requirement', clickable: true },
   { label: 'Plan', stage: 'plan', clickable: true },
 ];
 
-const QUICK_STEPS: StageStep[] = [
-  { label: 'Analysis', stage: 'analyzing' },
-  { label: 'Collecting', stage: 'collecting', clickable: true },
-  { label: 'Domain', stage: 'domain', subStageNot: 'quiz' },
-  { label: 'Quiz', stage: 'domain', subStage: 'quiz', clickable: true },
-  { label: 'Final Assessment', stage: 'final_assessment', clickable: true },
-  { label: 'Requirement', stage: 'requirement', clickable: true },
-  { label: 'Job', stage: 'plan', clickable: true },
-];
-
-const VERIFY_STEPS: StageStep[] = [
+const REQUIREMENT_STEPS: StageStep[] = [
   { label: 'Analysis', stage: 'analyzing' },
   { label: 'Upload', stage: 'verify', subStage: 'upload', clickable: true },
-  { label: 'Verification', stage: 'verify', subStageNot: 'upload', clickable: true },
   { label: 'Requirement', stage: 'requirement', clickable: true },
   { label: 'Plan', stage: 'plan', clickable: true },
 ];
 
 const STEPS_BY_MODE: Record<ChatMode, StageStep[]> = {
   plan: PLAN_STEPS,
-  quick: QUICK_STEPS,
-  verify: VERIFY_STEPS,
+  requirement: REQUIREMENT_STEPS,
 };
 
 function isAllDone(mode: ChatMode, stage: string, subStage: string): boolean {
   if (stage === 'plan' && subStage === 'plan') return true;
-  if (mode === 'verify' && stage === 'verify' && subStage === 'satisfied') return true;
   return false;
 }
 

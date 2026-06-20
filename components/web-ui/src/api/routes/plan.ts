@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import {
   getPlanJobs,
+  getPlanBlocks,
   getChatSession,
   updateChatSession,
   isUserAuthorizedForProject,
@@ -23,6 +24,20 @@ planRouter.get('/jobs', requireProjectAccess, (req, res) => {
   try {
     const jobs = getPlanJobs(Number(chatId));
     res.json(jobs);
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+planRouter.get('/blocks', requireProjectAccess, (req, res) => {
+  const chatId = req.query.chatId;
+  if (!chatId) {
+    res.status(400).json({ error: 'chatId is required' });
+    return;
+  }
+  try {
+    const blocks = getPlanBlocks(Number(chatId));
+    res.json(blocks);
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }

@@ -11,5 +11,6 @@ This folder contains the architectural domain documentation for the OpenVelo pro
 | **Pipelines** | Execution pipelines, dependency model, and the retry architecture. | [core/pipelines.md](core/pipelines.md) |
 | **Planning Workflows** | The database-driven `collecting` stage state machine. | [core/planning-workflows.md](core/planning-workflows.md) |
 | **Web UI State Machine** | Reference of all 9 chat stages and their substages. | [core/web-ui-state-machine.md](core/web-ui-state-machine.md) |
+| **`requirement` Chat Mode** | The fourth chat mode: upload a `.md` requirement doc, skip `collecting`, land at `requirement/requirement`. | [core/requirement-mode.md](core/requirement-mode.md) |
 | **Authentication** | Users, groups, JWT, session secret, middleware, password policy. | [core/auth.md](core/auth.md) |
 | **Environment Variables** | All env vars across the three components. | [core/environment.md](core/environment.md) |

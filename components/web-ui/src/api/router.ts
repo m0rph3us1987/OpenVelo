@@ -54,8 +54,8 @@ apiRouter.post('/chatCreate', requireProjectAccess, (req: Request, res: Response
     res.status(400).json({ error: 'mode, name, and project_id are required' });
     return;
   }
-  if (!['plan', 'quick', 'verify'].includes(mode)) {
-    res.status(400).json({ error: 'mode must be plan, quick, or verify' });
+  if (!['plan', 'requirement'].includes(mode)) {
+    res.status(400).json({ error: 'mode must be plan or requirement' });
     return;
   }
 

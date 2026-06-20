@@ -32,10 +32,16 @@ function TestableModeGrid({ selectedMode, onSelect }: { selectedMode: string | n
       description: 'Verifies if all the features from the requirement are implemented as per requirement. Use this mode after the agent has implemented your plan to make sure nothing was left behind.',
       icon: 'ShieldCheck',
     },
+    {
+      mode: 'requirement' as const,
+      label: 'Requirement',
+      description: 'Upload a requirement document and generate a plan from it',
+      icon: 'FileText',
+    },
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {MODE_OPTIONS.map((option) => {
         const isSelected = selectedMode === option.mode;
         return (
@@ -70,6 +76,23 @@ describe('NewChatModal mode selection grid', () => {
     assert.ok(html.includes('Plan'), 'Should contain Plan label');
     assert.ok(html.includes('Quick'), 'Should contain Quick label');
     assert.ok(html.includes('Verify'), 'Should contain Verify label');
+    assert.ok(html.includes('Requirement'), 'Should contain Requirement label');
+  });
+
+  it('Requirement tile displays FileText icon and full description', () => {
+    const html = ReactDOMServer.renderToString(
+      <TestableModeGrid selectedMode={null} onSelect={() => {}} />
+    );
+    const requirementDesc = 'Upload a requirement document and generate a plan from it';
+    assert.ok(html.includes(requirementDesc), `Should contain full Requirement description. Got: ${html}`);
+    assert.ok(html.includes('FileText'), 'Should contain FileText icon');
+  });
+
+  it('grid uses 2-cols mobile and 4-cols sm layout', () => {
+    const html = ReactDOMServer.renderToString(
+      <TestableModeGrid selectedMode={null} onSelect={() => {}} />
+    );
+    assert.ok(html.includes('grid-cols-2 sm:grid-cols-4'), `Should use updated grid classes. Got: ${html}`);
   });
 
   it('Verify tile displays ShieldCheck icon and full description', () => {

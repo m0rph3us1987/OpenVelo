@@ -75,7 +75,6 @@ All read at startup into the static `CONFIG` object, then **overridden** by `app
 ### Sub-derived constants (not env)
 - `STORY_PATH` = `/tmp/story.md` (always).
 - `HOME_DIR` = `process.env.USERPROFILE || 'C:\\Users\\ContainerAdministrator'` on Windows, `/root` on Linux.
-- `TOOLS_CACHE_DIR` = `<HOME_DIR>/.openvelo/toolscache` on Windows, `/repo/.openvelo/toolscache` on Linux.
 
 ## Spawn Env (set by web-ui when launching the orchestrator)
 

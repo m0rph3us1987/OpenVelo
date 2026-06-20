@@ -321,10 +321,6 @@ export class WorkflowEngine {
     private async runSetup(): Promise<void> {
         if (!this.client) throw new Error('ACPClient not initialized');
 
-        if (!fs.existsSync(CONFIG.TOOLS_CACHE_DIR)) {
-            fs.mkdirSync(CONFIG.TOOLS_CACHE_DIR, { recursive: true });
-        }
-
         console.log('Updating package lists...');
         await runCommand('apt-get', ['update', '-y']);
 

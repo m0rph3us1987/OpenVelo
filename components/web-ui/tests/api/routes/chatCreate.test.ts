@@ -67,7 +67,7 @@ function createTables(db: Database.Database): void {
     INSERT OR IGNORE INTO models (project_id, provider, model_name) VALUES (1, 'openai', 'gpt-4');
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify')),
+      mode TEXT NOT NULL CHECK(mode IN ('plan', 'quick', 'verify', 'requirement')),
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       stage TEXT NOT NULL DEFAULT 'init',
@@ -188,20 +188,13 @@ describe('chatCreate endpoint', () => {
     closeDb();
   });
 
-  it('accepts verify mode and stores it correctly', async () => {
+  it('rejects verify mode with 400', async () => {
     const res = await makePostRequest(app, '/chats/chatCreate', {
       mode: 'verify',
       name: 'test-verify',
       project_id: 1
     });
-    assert.strictEqual(res.status, 201);
-    const chat = res.body as { id: number; mode: string; name: string };
-    assert.strictEqual(chat.mode, 'verify');
-    assert.strictEqual(chat.name, 'test-verify');
-
-    const dbChat = db.prepare('SELECT mode, name FROM chat_sessions WHERE id = ?').get(chat.id) as { mode: string; name: string };
-    assert.strictEqual(dbChat.mode, 'verify');
-    assert.strictEqual(dbChat.name, 'test-verify');
+    assert.strictEqual(res.status, 400);
   });
 
   it('rejects invalid mode with 400 and correct error message', async () => {
@@ -211,7 +204,7 @@ describe('chatCreate endpoint', () => {
       project_id: 1
     });
     assert.strictEqual(res.status, 400);
-    assert.deepStrictEqual(res.body, { error: 'mode must be plan, quick, or verify' });
+    assert.deepStrictEqual(res.body, { error: 'mode must be plan or requirement' });
   });
 
   it('accepts plan mode (no regression)', async () => {
@@ -225,15 +218,29 @@ describe('chatCreate endpoint', () => {
     assert.strictEqual(chat.mode, 'plan');
   });
 
-  it('accepts quick mode (no regression)', async () => {
+  it('rejects quick mode with 400', async () => {
     const res = await makePostRequest(app, '/chats/chatCreate', {
       mode: 'quick',
       name: 'test-quick',
       project_id: 1
     });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('accepts requirement mode and stores it correctly', async () => {
+    const res = await makePostRequest(app, '/chats/chatCreate', {
+      mode: 'requirement',
+      name: 'test-requirement',
+      project_id: 1
+    });
     assert.strictEqual(res.status, 201);
-    const chat = res.body as { mode: string };
-    assert.strictEqual(chat.mode, 'quick');
+    const chat = res.body as { id: number; mode: string; name: string };
+    assert.strictEqual(chat.mode, 'requirement');
+    assert.strictEqual(chat.name, 'test-requirement');
+
+    const dbChat = db.prepare('SELECT mode, name FROM chat_sessions WHERE id = ?').get(chat.id) as { mode: string; name: string };
+    assert.strictEqual(dbChat.mode, 'requirement');
+    assert.strictEqual(dbChat.name, 'test-requirement');
   });
 
   it('rejects missing mode', async () => {
