@@ -6,6 +6,7 @@ import {
     initJobStatus,
     updateJobStatusStage,
     incrementJobStatusRetry,
+    getJobStatus,
     setJobPlan,
     updateJobUsage,
     type PlanEntry,
@@ -57,21 +58,111 @@ export async function checkpointAllAgents(): Promise<void> {
     await Promise.all(pending);
 }
 
-export async function connectToAgent(jobId: number, containerId: string, host: string, port: number, jobTitle: string = '', story?: string): Promise<void> {
+export async function connectToAgent(jobId: number, containerId: string, host: string, port: number, jobTitle: string = '', story?: string, retryCount: number = 0): Promise<void> {
     const url = `ws://${host}:${port}`;
-    initJobStatus(jobId, new Date().toISOString(), CONFIG.MAX_RETRIES + 1);
+    initJobStatus(jobId, new Date().toISOString(), CONFIG.MAX_RETRIES + 1, retryCount);
     let retries = 0;
     const maxRetries = 10;
     const delay = 1000;
 
+    let ws: WebSocket | null = null;
+    let finishedCleanly = false;
+    let jobStatus = 'unknown';
+
+    let countdown = CONFIG.AGENT_MAX_TIMEOUT;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const clearCountdown = () => {
+        if (intervalId !== null) {
+            clearInterval(intervalId);
+            intervalId = null;
+        }
+    };
+
+    const handleInactivityTimeout = async () => {
+        console.warn(`[JOB ${jobId}] Agent inactivity timeout reached.`);
+        finishedCleanly = true;
+        clearCountdown();
+
+        // Try sending checkpoint
+        await new Promise<void>((resolve) => {
+            const grace = setTimeout(() => {
+                console.warn(`[JOB ${jobId}] Checkpoint grace period elapsed.`);
+                resolve();
+            }, 60_000);
+
+            const checkpointListener = (data: unknown) => {
+                try {
+                    const payload = JSON.parse(data as string) as { type?: string };
+                    if (payload.type === 'checkpoint_done') {
+                        clearTimeout(grace);
+                        if (ws) ws.off('message', checkpointListener);
+                        resolve();
+                    }
+                } catch { /* ignore */ }
+            };
+            if (ws) {
+                ws.on('message', checkpointListener);
+                if (ws.readyState === ws.OPEN) {
+                    ws.send(JSON.stringify({ type: 'checkpoint' }));
+                } else {
+                    clearTimeout(grace);
+                    resolve();
+                }
+            } else {
+                clearTimeout(grace);
+                resolve();
+            }
+        });
+
+        // Send job_update status FAILED with error
+        send({
+            type: 'job_update',
+            jobId,
+            status: 'FAILED',
+            error: 'Agent inactivity timeout',
+            timestamp: new Date().toISOString(),
+        });
+
+        // Check if we can retry
+        const status = getJobStatus(jobId);
+        const maxRetriesReached = status ? status.attempt >= status.maxAttempts : true;
+        if (!maxRetriesReached) {
+            incrementJobStatusRetry(jobId);
+            send({ type: 'job_retry', jobId });
+        } else {
+            console.log(`Job ${jobId} reached max retries, not retrying.`);
+        }
+
+        if (ws) ws.close();
+    };
+
+    const startCountdown = () => {
+        clearCountdown();
+        countdown = CONFIG.AGENT_MAX_TIMEOUT;
+        intervalId = setInterval(async () => {
+            countdown--;
+            if (countdown <= 0) {
+                clearCountdown();
+                await handleInactivityTimeout();
+            }
+        }, 1000);
+    };
+
+    const resetCountdown = () => {
+        countdown = CONFIG.AGENT_MAX_TIMEOUT;
+    };
+
+    startCountdown();
+
     const connect = (): Promise<WebSocket> => {
         return new Promise((resolve, reject) => {
             console.log(`Attempting to connect to agent at ${url} (Attempt ${retries + 1}/${maxRetries})...`);
-            const ws = new WebSocket(url);
+            const wsInstance = new WebSocket(url);
 
-            ws.on('open', async () => {
+            wsInstance.on('open', async () => {
                 console.log(`Connected to agent for job ${jobId}. Sending handshake...`);
-                ws.send(JSON.stringify({
+                wsInstance.send(JSON.stringify({
                     type: 'handshake',
                     job_id: jobId,
                     config: {
@@ -91,10 +182,10 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                         agent_max_timeout: CONFIG.AGENT_MAX_TIMEOUT,
                     }
                 }));
-                resolve(ws);
+                resolve(wsInstance);
             });
 
-            ws.on('error', (err) => {
+            wsInstance.on('error', (err) => {
                 if (retries < maxRetries) {
                     retries++;
                     setTimeout(() => connect().then(resolve).catch(reject), delay);
@@ -105,63 +196,22 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
         });
     };
 
-    const ws = await connect();
+    let wsObj: WebSocket;
+    try {
+        wsObj = await connect();
+        ws = wsObj;
+    } catch (err) {
+        clearCountdown();
+        throw err;
+    }
+
     activeAgents.set(jobId, ws);
-
-    let finishedCleanly = false;
-    let jobStatus = 'unknown';
-    let inactivityHandle: ReturnType<typeof setTimeout> | null = null;
-
-    const clearInactivity = () => {
-        if (inactivityHandle !== null) clearTimeout(inactivityHandle);
-    };
-
-    const handleInactivityTimeout = async () => {
-        console.warn(`[JOB ${jobId}] No log output for ${CONFIG.AGENT_MAX_TIMEOUT}ms. Sending checkpoint...`);
-
-        await new Promise<void>((resolve) => {
-            const grace = setTimeout(() => {
-                console.warn(`[JOB ${jobId}] Checkpoint grace period elapsed.`);
-                resolve();
-            }, 60_000);
-
-            const checkpointListener = (data: unknown) => {
-                try {
-                    const payload = JSON.parse(data as string) as { type?: string };
-                    if (payload.type === 'checkpoint_done') {
-                        clearTimeout(grace);
-                        ws.off('message', checkpointListener);
-                        resolve();
-                    }
-                } catch { /* ignore */ }
-            };
-            ws.on('message', checkpointListener);
-            if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify({ type: 'checkpoint' }));
-            } else {
-                clearTimeout(grace);
-                resolve();
-            }
-        });
-
-        ws.close();
-        // Tell web-ui to retry this job
-        incrementJobStatusRetry(jobId);
-        send({ type: 'job_retry', jobId });
-    };
-
-    const resetInactivityTimer = () => {
-        clearInactivity();
-        inactivityHandle = setTimeout(handleInactivityTimeout, CONFIG.AGENT_MAX_TIMEOUT);
-    };
-
-    resetInactivityTimer();
 
     // Return a Promise that resolves only when the WS session ends (close event).
     // This keeps activeContainers populated for the duration of the job so stopAllContainers works.
     return new Promise<void>((resolve) => {
-        ws.on('close', () => {
-            clearInactivity();
+        ws!.on('close', () => {
+            clearCountdown();
             activeAgents.delete(jobId);
 
             if (stoppedJobs.has(jobId)) {
@@ -187,11 +237,11 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             resolve();
         });
 
-        ws.on('message', async (data: string) => {
+        ws!.on('message', async (data: string) => {
             const payload = JSON.parse(data) as Record<string, unknown>;
 
             if (payload.type === 'status' || payload.type === 'info' || payload.type === 'error' || payload.type === 'warn' || payload.type === 'stdout' || payload.type === 'stderr') {
-                resetInactivityTimer();
+                resetCountdown();
                 if (payload.type === 'stdout' || payload.type === 'stderr') {
                     send({
                         type: 'job_log_chunk',
@@ -210,7 +260,6 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             }
 
             if (payload.type === 'plan') {
-                resetInactivityTimer();
                 const entries = (payload.entries as PlanEntry[] | undefined) ?? [];
                 setJobPlan(jobId, entries);
                 send({
@@ -222,7 +271,6 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             }
 
             if (payload.type === 'usage') {
-                resetInactivityTimer();
                 const usage = (payload.usage as Partial<UsageSnapshot> | undefined) ?? {};
                 const snapshot = updateJobUsage(jobId, usage);
                 send({
@@ -239,7 +287,6 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             }
 
             if (payload.type === 'context') {
-                resetInactivityTimer();
                 const patch: Partial<UsageSnapshot> = {};
                 if (typeof payload.used === 'number') patch.used = payload.used;
                 if (typeof payload.size === 'number') patch.size = payload.size;
@@ -257,7 +304,6 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             }
 
             if (payload.type === 'stage') {
-                resetInactivityTimer();
                 console.log(`[JOB ${jobId}] [STAGE] ${payload.stage}`);
                 const jobStatus = updateJobStatusStage(
                     jobId,
@@ -280,7 +326,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
             }
 
             if (payload.type === 'finish') {
-                clearInactivity();
+                clearCountdown();
                 finishedCleanly = true;
                 jobStatus = payload.status as string;
                 console.log(`Job ${jobId} finished with status: ${payload.status}`);
@@ -299,7 +345,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                     } else {
                         console.log(`Job ${jobId} reached max retries, not retrying.`);
                     }
-                    ws.close();
+                    ws!.close();
                     return;
                 }
 
@@ -311,7 +357,7 @@ export async function connectToAgent(jobId: number, containerId: string, host: s
                     timestamp: new Date().toISOString(),
                 });
 
-                ws.close();
+                ws!.close();
             }
         });
     });

@@ -559,8 +559,8 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
             jobId: job.id,
             startDateTime: update.startDateTime ?? prev?.startDateTime ?? '',
             stage: update.stage ?? prev?.stage ?? '',
-            attempt: update.attempt ?? prev?.attempt ?? 1,
-            maxAttempts: update.maxAttempts ?? prev?.maxAttempts ?? 1,
+            attempt: update.attempt ?? (update.retryCount !== undefined ? update.retryCount + 1 : (prev?.attempt ?? 1)),
+            maxAttempts: update.maxAttempts ?? prev?.maxAttempts ?? (maxRetries + 1),
             agentAttempt: update.agentAttempt ?? prev?.agentAttempt,
             agentMaxRetries: update.agentMaxRetries ?? prev?.agentMaxRetries,
           }));

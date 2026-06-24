@@ -34,7 +34,10 @@ function computeAttempt(jobId: number): number {
     return (retryCounts.get(jobId) ?? 0) + 1;
 }
 
-export function initJobStatus(jobId: number, startedAtIso: string, maxAttempts: number): JobStatus {
+export function initJobStatus(jobId: number, startedAtIso: string, maxAttempts: number, retryCount?: number): JobStatus {
+    if (retryCount !== undefined) {
+        retryCounts.set(jobId, retryCount);
+    }
     const status: JobStatus = {
         jobId,
         startDateTime: startedAtIso,

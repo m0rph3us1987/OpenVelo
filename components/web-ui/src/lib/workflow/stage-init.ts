@@ -73,26 +73,46 @@ export async function handleInit(chatId: number): Promise<void> {
     whitelistedPaths[`${parentSkills}\\**`] = 'allow';
   }
 
+  const permissions = {
+    "read": "allow",
+    "write": "allow",
+    "edit": "allow",
+    "delete": "allow",
+    "move": "allow",
+    "search": "allow",
+    "execute": "allow",
+    "think": "allow",
+    "fetch": "allow",
+    "switch_mode": "allow",
+    "bash": "allow",
+    "grep": "allow",
+    "glob": "allow",
+    "todowrite": "allow",
+    "task": "allow",
+    "ask_user": "allow",
+    "question": "deny",
+    "*": "allow",
+    "external_directory": whitelistedPaths
+  };
+
+  const agentConfig: Record<string, { permission: any }> = {};
+  const agentsList = ['plan', 'code', 'build', 'general', 'explore', 'ask'];
+  for (const name of agentsList) {
+    agentConfig[name] = { permission: permissions };
+  }
+
   const opencodeConfigPath = path.join(chatDir, 'opencode.json');
   fs.writeFileSync(opencodeConfigPath, JSON.stringify({
     "$schema": "https://opencode.ai/config.json",
-    "permission": {
-      "*": "allow",
-      "ask_user": "deny",
-      "question": "deny",
-      "external_directory": whitelistedPaths
-    }
+    "permission": permissions,
+    "agent": agentConfig
   }, null, 2));
 
   const kiloConfigPath = path.join(chatDir, 'kilo.json');
   fs.writeFileSync(kiloConfigPath, JSON.stringify({
     "$schema": "https://kilo.ai/config.json",
-    "permission": {
-      "*": "allow",
-      "ask_user": "deny",
-      "question": "deny",
-      "external_directory": whitelistedPaths
-    }
+    "permission": permissions,
+    "agent": agentConfig
   }, null, 2));
 
   loggerService.appendVerbose(chatId, 'workflow:init', `Cloning repository to ${repoDir}`);

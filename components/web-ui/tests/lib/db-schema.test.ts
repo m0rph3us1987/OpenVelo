@@ -69,7 +69,7 @@ describe('db.ts schema migrations', () => {
       test_cmd: null,
       staging_branch: 'staging',
       poll_interval: 60000,
-      agent_max_timeout: 1800000,
+      agent_max_timeout: 300,
       max_parallel_jobs: 1,
       max_retries: 3,
       agent_max_retries: 3,

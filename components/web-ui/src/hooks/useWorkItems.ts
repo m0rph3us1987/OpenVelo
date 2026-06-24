@@ -54,6 +54,11 @@ export function useWorkItems({
             if (lastUpdate.agentAttempt !== undefined) updated.agent_attempt = lastUpdate.agentAttempt;
             if (lastUpdate.agentMaxRetries !== undefined) updated.agent_max_retries = lastUpdate.agentMaxRetries;
           }
+          if (lastUpdate.retryCount !== undefined) {
+            updated.retry_count = lastUpdate.retryCount;
+          } else if (lastUpdate.attempt !== undefined) {
+            updated.retry_count = lastUpdate.attempt - 1;
+          }
           return updated;
         })
       )

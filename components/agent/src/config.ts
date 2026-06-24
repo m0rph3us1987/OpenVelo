@@ -12,7 +12,7 @@ export const CONFIG = {
     REPO_PATH: process.env.REPO_PATH || (IS_WINDOWS ? 'C:\\repo' : '/repo'),
     HOME_DIR: IS_WINDOWS ? (process.env.USERPROFILE || 'C:\\Users\\ContainerAdministrator') : '/root',
     MAX_RETRIES: parseInt(process.env.AGENT_MAX_RETRIES || process.env.MAX_RETRIES || '3', 10),
-    AGENT_MAX_TIMEOUT: parseInt(process.env.AGENT_MAX_TIMEOUT || process.env.MAX_TIMEOUT || '1800000', 10),
+    AGENT_MAX_TIMEOUT: parseInt(process.env.AGENT_MAX_TIMEOUT || process.env.MAX_TIMEOUT || '300', 10),
     AGENT_PLATFORM: (process.env.AGENT_PLATFORM || (IS_WINDOWS ? 'windows' : 'linux')) as 'linux' | 'windows',
 
     // Populated via handshake message from the Orchestrator

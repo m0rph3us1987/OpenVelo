@@ -291,16 +291,37 @@ function mapStatusToLegacy(status: 'pending' | 'in_progress' | 'completed' | 'fa
     return status;
 }
 
-function toolCallFromAcp(tc: ToolCall | ToolCallUpdate, fallbackStatus: ACPToolCall['status'] = 'pending'): ACPToolCall {
+function toolCallFromAcp(
+    tc: ToolCall | ToolCallUpdate,
+    fallbackStatus: ACPToolCall['status'] = 'pending',
+    existing?: ACPToolCall,
+): ACPToolCall {
     const upd = tc as ToolCallUpdate;
+    const toolName = upd.kind ? mapToolKind(upd.kind) : (existing?.tool ?? 'unknown');
     const result: ACPToolCall = {
         callID: tc.toolCallId,
-        tool: mapToolKind(upd.kind ?? undefined),
+        tool: toolName,
         status: mapStatusToLegacy((upd.status ?? fallbackStatus) as 'pending' | 'in_progress' | 'completed' | 'failed'),
     };
-    if (tc.title) result.title = tc.title;
-    if (upd.rawInput !== undefined && upd.rawInput !== null) result.input = upd.rawInput as Record<string, unknown>;
-    if (upd.rawOutput !== undefined && upd.rawOutput !== null) result.output = upd.rawOutput;
+    const titleVal = tc.title || existing?.title;
+    if (titleVal) result.title = titleVal;
+    if (upd.rawInput !== undefined && upd.rawInput !== null) {
+        if (typeof upd.rawInput === 'object' && upd.rawInput !== null && !Array.isArray(upd.rawInput)) {
+            result.input = {
+                ...(existing?.input ?? {}),
+                ...(upd.rawInput as Record<string, unknown>),
+            };
+        } else {
+            result.input = upd.rawInput as Record<string, unknown>;
+        }
+    } else if (existing?.input) {
+        result.input = existing.input;
+    }
+    if (upd.rawOutput !== undefined && upd.rawOutput !== null) {
+        result.output = upd.rawOutput;
+    } else if (existing?.output) {
+        result.output = existing.output;
+    }
     return result;
 }
 
@@ -597,9 +618,7 @@ export class ACPClient {
             }
             case 'tool_call_update': {
                 const existing = acc.toolCalls.get(update.toolCallId);
-                const merged: ACPToolCall = existing
-                    ? { ...existing, ...toolCallFromAcp(update, existing.status) }
-                    : toolCallFromAcp(update, 'pending');
+                const merged: ACPToolCall = toolCallFromAcp(update, existing?.status ?? 'pending', existing);
                 acc.toolCalls.set(update.toolCallId, merged);
                 if (!existing) acc.toolCallOrder.push(update.toolCallId);
                 this.maybeLogToolCall(acc, merged);
@@ -1043,6 +1062,10 @@ export class ACPClient {
                 return !input['pattern'] || typeof input['pattern'] !== 'string';
             case 'grep':
                 return !input['pattern'] || typeof input['pattern'] !== 'string';
+            case 'todowrite':
+                return !input['todos'] || !Array.isArray(input['todos']) || input['todos'].length === 0;
+            case 'task':
+                return !input['description'] && !input['task_id'];
             case 'search': {
                 // At least one of the recognized query fields must
                 // be present, otherwise the tool call was fired

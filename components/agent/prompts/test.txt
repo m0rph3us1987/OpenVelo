@@ -27,7 +27,9 @@ If the build command fails, proceed directly to Step 4 and report `build_failed`
 If the build command succeeds, run the test command:
 `{{TEST_CMD}}`
 
-If any tests fail, proceed to Step 4 and report `tests_failed`.
+Note: The test command is subject to a strict 30-second timeout. If the execution takes longer than 30 seconds to complete, the process will be force-killed, and the run will be considered failed.
+
+If any tests fail or time out, proceed to Step 4 and report `tests_failed`.
 
 ### Step 4 — Output Verdict
 Write your verdict as valid JSON to the file at {{TEST_REPORT_PATH}}.

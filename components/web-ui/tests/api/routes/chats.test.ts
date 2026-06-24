@@ -39,7 +39,7 @@ function createTables(db: Database.Database): void {
       test_cmd TEXT,
       staging_branch TEXT NOT NULL DEFAULT 'staging',
       poll_interval INTEGER NOT NULL DEFAULT 60000,
-      agent_max_timeout INTEGER NOT NULL DEFAULT 1800000,
+      agent_max_timeout INTEGER NOT NULL DEFAULT 300,
       max_parallel_jobs INTEGER NOT NULL DEFAULT 1,
       max_retries INTEGER NOT NULL DEFAULT 3,
       agent_max_retries INTEGER NOT NULL DEFAULT 3,

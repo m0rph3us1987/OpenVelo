@@ -40,7 +40,7 @@ export const DEFAULTS: ProjectFormData = {
   test_cmd: '',
   staging_branch: 'staging',
   poll_interval: 60000,
-  agent_max_timeout: 1800000,
+  agent_max_timeout: 300,
   max_parallel_jobs: 1,
   max_retries: 3,
   agent_max_retries: 3,
@@ -325,7 +325,7 @@ export function ProjectForm({ initial, suggestedPort, onSubmit, onCancel, isSubm
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <Field label="Agent Build Retries" id="agent_max_retries" type="number" value={form.agent_max_retries}
                         onChange={setNum('agent_max_retries')} />
-                      <Field label="Agent Inactivity Timeout (ms)" id="agent_max_timeout" type="number" value={form.agent_max_timeout}
+                      <Field label="Agent Inactivity Timeout (seconds)" id="agent_max_timeout" type="number" value={form.agent_max_timeout}
                         onChange={setNum('agent_max_timeout')} />
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

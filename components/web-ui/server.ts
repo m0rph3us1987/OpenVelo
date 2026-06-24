@@ -433,6 +433,7 @@ function handleOrchestratorConnection(ws: WebSocket, query: Record<string, strin
                     type: 'job_update',
                     jobId,
                     status: 'PENDING',
+                    retryCount: newCount,
                     timestamp: new Date().toISOString(),
                 });
             } else {
@@ -442,6 +443,7 @@ function handleOrchestratorConnection(ws: WebSocket, query: Record<string, strin
                     type: 'job_update',
                     jobId,
                     status: 'FAILED',
+                    retryCount: newCount,
                     timestamp: new Date().toISOString(),
                 });
             }

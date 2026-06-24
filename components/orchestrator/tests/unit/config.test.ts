@@ -30,7 +30,7 @@ describe('applyProjectConfig', () => {
             test_cmd: 'npm test',
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,
@@ -62,7 +62,7 @@ describe('applyProjectConfig', () => {
             test_cmd: null,
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,
@@ -94,7 +94,7 @@ describe('applyProjectConfig', () => {
             test_cmd: undefined,
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,
@@ -126,7 +126,7 @@ describe('applyProjectConfig', () => {
             test_cmd: 'npm test',
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,
@@ -144,7 +144,7 @@ describe('applyProjectConfig', () => {
         assert.strictEqual(CONFIG.TEST_CMD, 'npm test');
         assert.strictEqual(CONFIG.STAGING_BRANCH, 'staging');
         assert.strictEqual(CONFIG.POLL_INTERVAL, 60000);
-        assert.strictEqual(CONFIG.AGENT_MAX_TIMEOUT, 1800000);
+        assert.strictEqual(CONFIG.AGENT_MAX_TIMEOUT, 300);
         assert.strictEqual(CONFIG.MAX_PARALLEL_JOBS, 1);
         assert.strictEqual(CONFIG.MAX_RETRIES, 3);
         assert.strictEqual(CONFIG.AGENT_MAX_RETRIES, 3);
@@ -169,7 +169,7 @@ describe('applyProjectConfig', () => {
             test_cmd: 'npm test',
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,
@@ -215,7 +215,7 @@ describe('applyProjectConfig', () => {
             test_cmd: null,
             staging_branch: 'staging',
             poll_interval: 60000,
-            agent_max_timeout: 1800000,
+            agent_max_timeout: 300,
             max_parallel_jobs: 1,
             max_retries: 3,
             agent_max_retries: 3,

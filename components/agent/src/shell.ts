@@ -25,7 +25,8 @@ function quoteArg(arg: string): string {
 export async function runCommand(
     command: string, 
     args: string[], 
-    cwd: string = CONFIG.REPO_PATH
+    cwd: string = CONFIG.REPO_PATH,
+    timeoutMs?: number
 ): Promise<{ code: number | null, output: string }> {
     return new Promise((resolve) => {
         const fullCommand = args.length > 0 
@@ -47,6 +48,16 @@ export async function runCommand(
         });
 
         let output = '';
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let timedOut = false;
+
+        if (timeoutMs !== undefined) {
+            timer = setTimeout(() => {
+                timedOut = true;
+                console.warn(`Command timed out after ${timeoutMs}ms. Killing process...`);
+                child.kill('SIGKILL');
+            }, timeoutMs);
+        }
 
         child.stdout?.on('data', (data) => {
             const str = data.toString();
@@ -61,6 +72,11 @@ export async function runCommand(
         });
 
         child.on('close', (code) => {
+            if (timer) clearTimeout(timer);
+            if (timedOut) {
+                resolve({ code: 1, output: output + '\nCommand timed out.' });
+                return;
+            }
             if (code !== 0 && code !== null) {
                 console.error(`Command exited with code ${code}`);
             }
@@ -68,6 +84,7 @@ export async function runCommand(
         });
 
         child.on('error', (err) => {
+            if (timer) clearTimeout(timer);
             console.error(`Failed to start process: ${err.message}`);
             resolve({ code: 1, output: err.message });
         });

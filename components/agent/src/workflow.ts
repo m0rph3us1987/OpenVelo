@@ -166,12 +166,6 @@ export class WorkflowEngine {
         try {
             await this.setupConfig();
             await this.diagnostics();
-            this.client = await ACPClient.init({ cwd: CONFIG.REPO_PATH });
-
-            messenger.onCheckpoint(async () => {
-                await this.checkpointCommit();
-            });
-
             AgentStatus.set('setup', 1, CONFIG.MAX_RETRIES);
 
             console.log('###############################################');
@@ -182,6 +176,13 @@ export class WorkflowEngine {
             console.log('Starting phase: SETUP');
 
             await this.prepareRepository();
+
+            this.client = await ACPClient.init({ cwd: CONFIG.REPO_PATH });
+
+            messenger.onCheckpoint(async () => {
+                await this.checkpointCommit();
+            });
+
             await this.runSetup();
 
             // ---- Stage state machine ----
@@ -357,7 +358,7 @@ export class WorkflowEngine {
 
             if (buildCode === 0 && CONFIG.TEST_CMD && !isEmpty && !isEmptyProject) {
                 console.log(`Running test command: ${CONFIG.TEST_CMD}`);
-                const res = await runCommand('bash', ['-c', CONFIG.TEST_CMD], CONFIG.REPO_PATH);
+                const res = await runCommand('bash', ['-c', CONFIG.TEST_CMD], CONFIG.REPO_PATH, 30000);
                 testCode = res.code ?? 1;
                 testOutput = res.output;
             }

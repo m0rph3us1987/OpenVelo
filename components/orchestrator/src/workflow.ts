@@ -29,6 +29,7 @@ export interface JobPayload {
     title: string | null;
     description: string | null;
     acceptance_criteria: string | null;
+    retry_count?: number;
 }
 
 // Track container IDs so we can stop them on pause/shutdown
@@ -78,7 +79,14 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
     activeJobCount++;
 
     // Notify web-ui we are starting
-    send({ type: 'job_update', jobId: job.id, status: 'RUNNING', timestamp: new Date().toISOString() });
+    send({
+        type: 'job_update',
+        jobId: job.id,
+        status: 'RUNNING',
+        attempt: (job.retry_count ?? 0) + 1,
+        maxAttempts: CONFIG.MAX_RETRIES + 1,
+        timestamp: new Date().toISOString()
+    });
 
     const jobContent = formatJobMarkdownFromJob(job);
 
@@ -100,10 +108,19 @@ export async function processSingleJob(job: JobPayload): Promise<void> {
 
     // Use orchestrator's own time as the start time (more reliable than querying Docker)
     const startedAt = new Date().toISOString();
-    send({ type: 'job_update', jobId: job.id, status: 'RUNNING', containerId, startedAt, timestamp: new Date().toISOString() });
+    send({
+        type: 'job_update',
+        jobId: job.id,
+        status: 'RUNNING',
+        containerId,
+        startedAt,
+        attempt: (job.retry_count ?? 0) + 1,
+        maxAttempts: CONFIG.MAX_RETRIES + 1,
+        timestamp: new Date().toISOString()
+    });
 
     try {
-        await connectToAgent(job.id, containerId, host, port, job.title ?? '', jobContent);
+        await connectToAgent(job.id, containerId, host, port, job.title ?? '', jobContent, job.retry_count ?? 0);
     } catch (err) {
         console.error(`[JOB ${job.id}] Agent connection failed:`, err);
         send({ type: 'job_update', jobId: job.id, status: 'FAILED', error: String(err), timestamp: new Date().toISOString() });

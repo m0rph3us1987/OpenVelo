@@ -75,7 +75,7 @@ export const CONFIG = {
 
     // Docker / agents
     DOCKER_IMAGE: process.env.DOCKER_IMAGE || 'openvelo-agent:linux',
-    AGENT_MAX_TIMEOUT: parseInt(process.env.AGENT_MAX_TIMEOUT || '1800000', 10),
+    AGENT_MAX_TIMEOUT: parseInt(process.env.AGENT_MAX_TIMEOUT || '300', 10),
     MAX_PARALLEL_JOBS: parseInt(process.env.MAX_PARALLEL_JOBS || '1', 10),
     MAX_RETRIES: parseInt(process.env.MAX_RETRIES || '3', 10),
     AGENT_MAX_RETRIES: parseInt(process.env.AGENT_MAX_RETRIES || '3', 10),

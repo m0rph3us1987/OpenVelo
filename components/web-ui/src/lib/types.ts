@@ -69,6 +69,7 @@ export interface WsJobUpdateMessage {
   startDateTime?: string;
   attempt?: number;
   maxAttempts?: number;
+  retryCount?: number;
   timestamp: string;
 }
 
