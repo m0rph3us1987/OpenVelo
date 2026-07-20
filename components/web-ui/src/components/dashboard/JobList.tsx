@@ -7,13 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { cn, parseSqliteDate } from '@/lib/utils';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import type { Job } from '@/lib/types';
 import { useToast } from '@/context/ToastContext';
 
@@ -22,6 +15,7 @@ interface JobListProps {
   projectId: number;
   maxRetries: number;
   dockerImage?: string;
+  dockerImageTester?: string;
   liveStatus: 'running' | 'stopped';
   maxParallelJobs: number;
   hasRunningJobs: boolean;
@@ -43,6 +37,7 @@ interface ColumnProps {
   onEdit?: (job: Job) => void;
   maxRetries: number;
   dockerImage?: string;
+  dockerImageTester?: string;
   isPendingColumn?: boolean;
   onAddJob?: () => void;
   onOpenDetails: (jobId: number) => void;
@@ -61,6 +56,7 @@ function Column({
   onEdit,
   maxRetries,
   dockerImage,
+  dockerImageTester,
   isPendingColumn,
   onAddJob,
   onOpenDetails,
@@ -90,7 +86,9 @@ function Column({
       if (data && data.ids && Array.isArray(data.ids)) {
         onDropJob(data.ids);
       }
-    } catch (err) {}
+    } catch {
+      // ignore
+    }
   };
 
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>, job: Job) => {
@@ -158,7 +156,7 @@ function Column({
                   key={job.id}
                   job={job}
                   maxRetries={maxRetries}
-                  dockerImage={dockerImage}
+                  dockerImage={job.type === 'test' ? dockerImageTester : dockerImage}
                   selected={selectedIds.has(job.id)}
                   onSelectedChange={(s) => onToggleSelect(job.id, s)}
                   onEdit={onEdit ? () => onEdit(job) : undefined}
@@ -175,10 +173,10 @@ function Column({
   );
 }
 
-export function JobList({ jobs, projectId, maxRetries, dockerImage, liveStatus, maxParallelJobs, hasRunningJobs, onJobCreated, onStatusChange, onMaxParallelChange }: JobListProps) {
+export function JobList({ jobs, projectId, maxRetries, dockerImage, dockerImageTester, liveStatus, maxParallelJobs, hasRunningJobs, onJobCreated, onStatusChange, onMaxParallelChange }: JobListProps) {
   const { showToast } = useToast();
   const [selectedIds, setSelectedIds] = React.useState<Set<number>>(new Set());
-  const [isChanging, setIsChanging] = React.useState(false);
+  const [, setIsChanging] = React.useState(false);
   const [addJobOpen, setAddJobOpen] = React.useState(false);
   const [editJob, setEditJob] = React.useState<Job | undefined>(undefined);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
@@ -491,6 +489,7 @@ export function JobList({ jobs, projectId, maxRetries, dockerImage, liveStatus, 
             onEdit={(job) => setEditJob(job)}
             maxRetries={maxRetries}
             dockerImage={dockerImage}
+            dockerImageTester={dockerImageTester}
             isPendingColumn
             onAddJob={() => setAddJobOpen(true)}
             onOpenDetails={setActiveJobId}
@@ -507,6 +506,7 @@ export function JobList({ jobs, projectId, maxRetries, dockerImage, liveStatus, 
             onDeselectAll={() => setSelectedIds((prev) => { const next = new Set(prev); runningColumnJobs.forEach((j) => next.delete(j.id)); return next; })}
             maxRetries={maxRetries}
             dockerImage={dockerImage}
+            dockerImageTester={dockerImageTester}
             onOpenDetails={setActiveJobId}
             acceptsDrop={false}
           />
@@ -521,6 +521,7 @@ export function JobList({ jobs, projectId, maxRetries, dockerImage, liveStatus, 
             onDelete={(ids) => openDeleteDialog(ids)}
             maxRetries={maxRetries}
             dockerImage={dockerImage}
+            dockerImageTester={dockerImageTester}
             onOpenDetails={setActiveJobId}
             acceptsDrop={true}
             onDropJob={(ids) => updateJobStatus(ids, 'COMPLETED')}
@@ -561,10 +562,11 @@ export function JobList({ jobs, projectId, maxRetries, dockerImage, liveStatus, 
       {activeJob && (
         <JobDetailModal
           job={activeJob}
-          dockerImage={dockerImage}
+          dockerImage={activeJob.type === 'test' ? dockerImageTester : dockerImage}
           maxRetries={maxRetries}
           onClose={() => setActiveJobId(null)}
           onEdit={activeJob.status === 'PENDING' ? () => setEditJob(activeJob) : undefined}
+          onDeleted={onJobCreated}
         />
       )}
     </div>

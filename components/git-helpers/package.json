@@ -1,0 +1,17 @@
+{
+  "name": "@openvelo/git-helpers",
+  "version": "0.1.0",
+  "description": "Shared git helpers (shared_repo / gbfs / remote-wins reset) used by the agent and tester components.",
+  "main": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

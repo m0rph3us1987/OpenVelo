@@ -200,6 +200,7 @@ export function initDb(): void {
       repo_url TEXT NOT NULL DEFAULT '',
       repo_pat TEXT,
       docker_image TEXT NOT NULL DEFAULT 'openvelo-agent:linux',
+      docker_image_tester TEXT NOT NULL DEFAULT 'openvelo-tester:linux',
       backend TEXT NOT NULL DEFAULT 'kilo',
       build_cmd TEXT,
       test_cmd TEXT,
@@ -222,8 +223,10 @@ export function initDb(): void {
       title TEXT,
       description TEXT,
       status TEXT,
+      type TEXT NOT NULL DEFAULT 'implementation',
       feature_id INTEGER REFERENCES plan_features(id),
       container_id TEXT,
+      vnc_host_port INTEGER,
       branch TEXT,
       retry_count INTEGER NOT NULL DEFAULT 0,
       started_at DATETIME,
@@ -284,6 +287,10 @@ export function initDb(): void {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Enforce uniqueness on (provider, model_name) so concurrent refreshes
+  // and ad-hoc upserts cannot create duplicate rows. The index is created
+  // idempotently so existing databases pick it up on next startup.
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_models_provider_model ON models(provider, model_name)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -487,6 +494,17 @@ export function initDb(): void {
     `CREATE TABLE IF NOT EXISTS plan_blocks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, block_index INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(chat_id, block_index))`,
     `ALTER TABLE plan_jobs ADD COLUMN block_id INTEGER REFERENCES plan_blocks(id) ON DELETE SET NULL`,
     `ALTER TABLE plan_jobs ADD COLUMN block_sequence INTEGER DEFAULT 0`,
+    `ALTER TABLE projects ADD COLUMN docker_image_tester TEXT NOT NULL DEFAULT 'openvelo-tester:linux'`,
+    `ALTER TABLE jobs ADD COLUMN type TEXT NOT NULL DEFAULT 'implementation'`,
+    `ALTER TABLE jobs ADD COLUMN vnc_host_port INTEGER`,
+    `ALTER TABLE jobs ADD COLUMN test_plan_markdown TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE jobs ADD COLUMN implements_job_id INTEGER`,
+    `ALTER TABLE plan_jobs ADD COLUMN test_plan_markdown TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE plan_jobs ADD COLUMN implements_job_id INTEGER`,
+    `ALTER TABLE jobs ADD COLUMN verdict TEXT`,
+    `ALTER TABLE jobs ADD COLUMN summary TEXT`,
+    `ALTER TABLE jobs ADD COLUMN passed_tests TEXT`,
+    `ALTER TABLE plan_jobs ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* ignore */ }
@@ -521,16 +539,19 @@ export function createProject(data: Omit<Project, 'id' | 'created_at' | 'updated
   const db = getDb();
   const result = db.prepare(`
     INSERT INTO projects (name, password_hash, port,
-      repo_host, repo_url, repo_pat, docker_image, backend,
+      repo_host, repo_url, repo_pat, docker_image, docker_image_tester, backend,
       default_model, execution_model, blueprint_model, analyzer_model, chat_model, requirement_model, planning_model, review_model, documentation_model,
       build_cmd, test_cmd, staging_branch, poll_interval, agent_max_timeout, max_parallel_jobs, max_retries, agent_max_retries, remove_deleted_containers,
       status, pid)
     VALUES (@name, @password_hash, @port,
-      @repo_host, @repo_url, @repo_pat, @docker_image, @backend,
+      @repo_host, @repo_url, @repo_pat, @docker_image, @docker_image_tester, @backend,
       @default_model, @execution_model, @blueprint_model, @analyzer_model, @chat_model, @requirement_model, @planning_model, @review_model, @documentation_model,
       @build_cmd, @test_cmd, @staging_branch, @poll_interval, @agent_max_timeout, @max_parallel_jobs, @max_retries, @agent_max_retries, @remove_deleted_containers,
       @status, @pid)
-  `).run(data);
+  `).run({
+    ...data,
+    docker_image_tester: data.docker_image_tester || 'openvelo-tester:linux',
+  });
   return getProject(result.lastInsertRowid as number)!;
 }
 
@@ -590,19 +611,29 @@ export function updateJob(jobId: number, data: Partial<Omit<Job, 'id' | 'created
   return getJob(jobId);
 }
 
-export function resetJob(jobId: number): void {
+export function resetJob(jobId: number, keepPassedTests = false): void {
   const db = getDb();
-  db.prepare(
-    "UPDATE jobs SET status = 'PENDING', stage = NULL, agent_attempt = NULL, agent_max_retries = NULL, container_id = NULL, retry_count = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-  ).run(jobId);
+  if (keepPassedTests) {
+    db.prepare(
+      "UPDATE jobs SET status = 'PENDING', stage = NULL, agent_attempt = NULL, agent_max_retries = NULL, container_id = NULL, vnc_host_port = NULL, retry_count = 0, verdict = NULL, summary = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).run(jobId);
+  } else {
+    db.prepare(
+      "UPDATE jobs SET status = 'PENDING', stage = NULL, agent_attempt = NULL, agent_max_retries = NULL, container_id = NULL, vnc_host_port = NULL, retry_count = 0, verdict = NULL, summary = NULL, passed_tests = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    ).run(jobId);
+  }
 }
 
 export type JobStatus = 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STOPPED';
 
-export function setJobStatus(jobId: number, status: JobStatus): void {
+export function setJobStatus(jobId: number, status: JobStatus, keepPassedTests = true): void {
   const db = getDb();
   if (status === 'PENDING') {
-    db.prepare('UPDATE jobs SET status = ?, started_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, jobId);
+    if (keepPassedTests) {
+      db.prepare('UPDATE jobs SET status = ?, started_at = NULL, verdict = NULL, summary = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, jobId);
+    } else {
+      db.prepare('UPDATE jobs SET status = ?, started_at = NULL, verdict = NULL, summary = NULL, passed_tests = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, jobId);
+    }
   } else {
     db.prepare('UPDATE jobs SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(status, jobId);
   }
@@ -617,7 +648,12 @@ export function setJobStarted(jobId: number): void {
 
 export function deleteJobByAdoId(projectId: number, adoId: string): void {
   const db = getDb();
+  const deletedJobs = db.prepare('SELECT id FROM jobs WHERE project_id = ? AND ado_id = ?').all(projectId, adoId) as { id: number }[];
   db.prepare('DELETE FROM jobs WHERE project_id = ? AND ado_id = ?').run(projectId, adoId);
+  const deletedIds = deletedJobs.map(j => j.id);
+  if (deletedIds.length > 0) {
+    removeDependenciesOnJobs(projectId, deletedIds);
+  }
 }
 
 export function deleteJobs(projectId: number, jobIds: number[]): void {
@@ -627,6 +663,35 @@ export function deleteJobs(projectId: number, jobIds: number[]): void {
     const chunk = jobIds.slice(i, i + CHUNK_SIZE);
     const placeholders = chunk.map(() => '?').join(', ');
     db.prepare(`DELETE FROM jobs WHERE project_id = ? AND id IN (${placeholders})`).run(projectId, ...chunk);
+  }
+  if (jobIds.length > 0) {
+    removeDependenciesOnJobs(projectId, jobIds);
+  }
+}
+
+function removeDependenciesOnJobs(projectId: number, deletedJobIds: number[]): void {
+  const db = getDb();
+  const deletedSet = new Set(deletedJobIds.map(id => String(id)));
+  const jobs = db.prepare('SELECT id, depends_on FROM jobs WHERE project_id = ?').all(projectId) as { id: number; depends_on: string | null }[];
+
+  for (const job of jobs) {
+    if (!job.depends_on) continue;
+    let deps: string[] = [];
+    try {
+      const parsed = JSON.parse(job.depends_on);
+      if (Array.isArray(parsed)) {
+        deps = parsed.map(d => String(d));
+      } else {
+        deps = [String(parsed)];
+      }
+    } catch {
+      deps = [String(job.depends_on)];
+    }
+
+    const newDeps = deps.filter(d => !deletedSet.has(d));
+    if (newDeps.length !== deps.length) {
+      db.prepare('UPDATE jobs SET depends_on = ? WHERE id = ?').run(JSON.stringify(newDeps), job.id);
+    }
   }
 }
 
@@ -678,6 +743,9 @@ export function insertLocalJob(projectId: number, input: {
   dependsOn?: string[] | null;
   featureId?: number | null;
   feature_id?: number | null;
+  type?: 'implementation' | 'test';
+  test_plan_markdown?: string;
+  implements_job_id?: number | null;
 }): Job {
   const db = getDb();
 
@@ -690,16 +758,22 @@ export function insertLocalJob(projectId: number, input: {
     : null;
 
   const featureId = input.featureId ?? input.feature_id ?? null;
+  const jobType = input.type === 'test' ? 'test' : 'implementation';
+  const testPlanMarkdown = input.test_plan_markdown ?? '';
+  const implementsJobId = input.implements_job_id ?? null;
 
   const result = db.prepare(`
-    INSERT INTO jobs (project_id, title, description, depends_on, status, feature_id)
-    VALUES (@projectId, @title, @description, @predecessorJson, 'PENDING', @featureId)
+    INSERT INTO jobs (project_id, title, description, depends_on, status, feature_id, type, test_plan_markdown, implements_job_id)
+    VALUES (@projectId, @title, @description, @predecessorJson, 'PENDING', @featureId, @jobType, @testPlanMarkdown, @implementsJobId)
   `).run({
     projectId,
     title,
     description,
     predecessorJson,
-    featureId
+    featureId,
+    jobType,
+    testPlanMarkdown,
+    implementsJobId,
   });
 
   const rowId = result.lastInsertRowid as number;
@@ -732,16 +806,31 @@ export function getPendingJobsByProject(projectId: number): Job[] {
   return db.prepare("SELECT * FROM jobs WHERE project_id = ? AND status = 'PENDING' ORDER BY id ASC").all(projectId) as Job[];
 }
 
-export function updateJobRunning(jobId: number, containerId: string, startedAt?: string): void {
+export function updateJobRunning(jobId: number, containerId: string, startedAt?: string, vncHostPort?: number): void {
   const db = getDb();
+  // Only set vnc_host_port on the first RUNNING transition — a later
+  // retry's port differs from the previous one and we want the *current*
+  // attempt's port to win.
   if (startedAt) {
-    db.prepare(
-      "UPDATE jobs SET status = 'RUNNING', container_id = ?, started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).run(containerId, startedAt, jobId);
+    if (vncHostPort && vncHostPort > 0) {
+      db.prepare(
+        "UPDATE jobs SET status = 'RUNNING', container_id = ?, vnc_host_port = ?, started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      ).run(containerId, vncHostPort, startedAt, jobId);
+    } else {
+      db.prepare(
+        "UPDATE jobs SET status = 'RUNNING', container_id = ?, started_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      ).run(containerId, startedAt, jobId);
+    }
   } else {
-    db.prepare(
-      "UPDATE jobs SET status = 'RUNNING', container_id = ?, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
-    ).run(containerId, jobId);
+    if (vncHostPort && vncHostPort > 0) {
+      db.prepare(
+        "UPDATE jobs SET status = 'RUNNING', container_id = ?, vnc_host_port = ?, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      ).run(containerId, vncHostPort, jobId);
+    } else {
+      db.prepare(
+        "UPDATE jobs SET status = 'RUNNING', container_id = ?, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+      ).run(containerId, jobId);
+    }
   }
 }
 
@@ -889,15 +978,14 @@ export function upsertModel(provider: string, modelName: string): Model {
     throw new Error(`Invalid model data: provider="${trimmedProvider}", modelName="${trimmedModelName}"`);
   }
   const db = getDb();
-  const existing = db.prepare('SELECT * FROM models WHERE provider = ? AND model_name = ?').get(trimmedProvider, trimmedModelName) as Model | undefined;
-  if (existing) {
-    return existing;
-  }
+  // INSERT OR IGNORE relies on the UNIQUE INDEX on (provider, model_name)
+  // and is a single atomic statement — safer under concurrent refreshes
+  // than a SELECT-then-INSERT pattern.
   const result = db.prepare(`
-    INSERT INTO models (provider, model_name)
+    INSERT OR IGNORE INTO models (provider, model_name)
     VALUES (@provider, @model_name)
   `).run({ provider: trimmedProvider, model_name: trimmedModelName });
-  return getModel(result.lastInsertRowid as number)!;
+  return getModel(result.lastInsertRowid as number) ?? db.prepare('SELECT * FROM models WHERE provider = ? AND model_name = ?').get(trimmedProvider, trimmedModelName) as Model;
 }
 
 export function deleteModel(id: number): void {
@@ -907,9 +995,21 @@ export function deleteModel(id: number): void {
 
 export function refreshModels(output: string): Model[] {
   const lines = output.trim().split('\n').filter(line => line.includes('/'));
-  const parsed = lines.map(line => {
-    const idx = line.lastIndexOf('/');
-    return { provider: line.substring(0, idx), modelName: line.substring(idx + 1) };
+  // `kilo models` outputs lines like
+  //   kilo/<provider>/<model>     (3 parts; <provider> may itself contain '/')
+  //   <provider>/<model>           (2 parts; legacy / direct upstream format)
+  // The provider is the second-to-last path segment and the model is the
+  // last segment. Splitting on the LAST '/' (the previous implementation)
+  // broke 3-part lines like `kilo/anthropic/claude-3-haiku`, producing
+  // provider='kilo/anthropic', model='claude-3-haiku' — which then leaked
+  // into the DB as rows with provider='kilo/anthropic' and persisted
+  // across container restarts, making the catalogue appear stale even
+  // after a manual refresh.
+  const parsed = lines.map((line) => {
+    const parts = line.split('/');
+    const modelName = parts[parts.length - 1];
+    const provider = parts[parts.length - 2];
+    return { provider, modelName };
   });
 
   const db = getDb();
@@ -1686,6 +1786,9 @@ export interface PlanJobRow {
   block_id: number | null;
   block_sequence: number;
   created_at: string;
+  test_plan_markdown: string;
+  implements_job_id: number | null;
+  depends_on: string;
 }
 
 export function updatePlanJobStatus(id: number, status: string): void {
@@ -1717,7 +1820,8 @@ export function insertPlanBlock(data: {
   return result.lastInsertRowid as number;
 }
 
-export function getPlanBlocks(chatId: number): PlanBlockRow[] {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function getPlanBlocks(_chatId: number): PlanBlockRow[] {
   return [];
 }
 
@@ -1734,15 +1838,19 @@ export function insertPlanJob(data: {
   requirement_line_mapping: string;
   block_id?: number | null;
   block_sequence?: number;
+  test_plan_markdown?: string;
+  implements_job_id?: number | null;
 }): number {
   const db = getDb();
   const result = db.prepare(`
-    INSERT INTO plan_jobs (chat_id, job_index, title, description, requirement_line_mapping, block_id, block_sequence)
-    VALUES (@chat_id, @job_index, @title, @description, @requirement_line_mapping, @block_id, @block_sequence)
+    INSERT INTO plan_jobs (chat_id, job_index, title, description, requirement_line_mapping, block_id, block_sequence, test_plan_markdown, implements_job_id)
+    VALUES (@chat_id, @job_index, @title, @description, @requirement_line_mapping, @block_id, @block_sequence, @test_plan_markdown, @implements_job_id)
   `).run({
     ...data,
     block_id: data.block_id ?? null,
-    block_sequence: data.block_sequence ?? 0
+    block_sequence: data.block_sequence ?? 0,
+    test_plan_markdown: data.test_plan_markdown ?? '',
+    implements_job_id: data.implements_job_id ?? null
   });
   return result.lastInsertRowid as number;
 }
@@ -1764,6 +1872,99 @@ export function getPlanJobs(chatId: number): PlanJobRow[] {
 export function deletePlanJobsByChatId(chatId: number): void {
   const db = getDb();
   db.prepare('DELETE FROM plan_jobs WHERE chat_id = ?').run(chatId);
+}
+
+export function getPlanJob(id: number): PlanJobRow | undefined {
+  const db = getDb();
+  return db.prepare('SELECT * FROM plan_jobs WHERE id = ?').get(id) as PlanJobRow | undefined;
+}
+
+export function updatePlanJob(
+  id: number,
+  updates: { title?: string; description?: string; depends_on?: string; content?: string | null; test_plan_markdown?: string }
+): PlanJobRow | undefined {
+  const db = getDb();
+  const sets: string[] = [];
+  const values: Record<string, unknown> = { id };
+
+  if (updates.title !== undefined) {
+    sets.push('title = @title');
+    values.title = updates.title;
+  }
+  if (updates.description !== undefined) {
+    sets.push('description = @description');
+    values.description = updates.description;
+  }
+  if (updates.depends_on !== undefined) {
+    sets.push('depends_on = @depends_on');
+    values.depends_on = updates.depends_on;
+  }
+  if (updates.content !== undefined) {
+    sets.push('content = @content');
+    values.content = updates.content;
+  }
+  if (updates.test_plan_markdown !== undefined) {
+    sets.push('test_plan_markdown = @test_plan_markdown');
+    values.test_plan_markdown = updates.test_plan_markdown;
+  }
+
+  if (sets.length === 0) return getPlanJob(id);
+
+  db.prepare(`UPDATE plan_jobs SET ${sets.join(', ')} WHERE id = @id`).run(values);
+  return getPlanJob(id);
+}
+
+export function deletePlanJob(id: number, chatId: number): void {
+  const db = getDb();
+  db.prepare('DELETE FROM plan_jobs WHERE id = ? AND chat_id = ?').run(id, chatId);
+}
+
+export function removeAndRewritePlanJobDependencies(
+  chatId: number,
+  deletedId: number,
+  deletedDependsOnJson?: string
+): number[] {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT id, depends_on FROM plan_jobs WHERE chat_id = ?'
+  ).all(chatId) as { id: number; depends_on: string }[];
+  const liveIds = new Set(rows.map(r => r.id));
+
+  let deletedParent: number | null = null;
+  const deletedDepSource = deletedDependsOnJson
+    ?? rows.find(r => r.id === deletedId)?.depends_on;
+  if (deletedDepSource) {
+    try {
+      const parsed = JSON.parse(deletedDepSource);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const candidate = Number(parsed[0]);
+        if (liveIds.has(candidate)) deletedParent = candidate;
+      }
+    } catch { /* ignore */ }
+  }
+  if (deletedParent === deletedId) deletedParent = null;
+
+  const rewritten: number[] = [];
+  const update = db.prepare('UPDATE plan_jobs SET depends_on = ? WHERE id = ?');
+  for (const row of rows) {
+    if (row.id === deletedId) continue;
+    let parsed: unknown[] = [];
+    try {
+      const v = JSON.parse(row.depends_on);
+      if (Array.isArray(v)) parsed = v;
+    } catch { parsed = []; }
+
+    if (parsed.length === 0) continue;
+    const firstId = Number(parsed[0]);
+    if (firstId !== deletedId) continue;
+
+    const newDep = deletedParent == null ? null : String(deletedParent);
+    const newJson = newDep == null ? '[]' : JSON.stringify([newDep]);
+    if (newJson === row.depends_on) continue;
+    update.run(newJson, row.id);
+    rewritten.push(row.id);
+  }
+  return rewritten;
 }
 
 export function deletePlanDataByChatId(chatId: number): void {

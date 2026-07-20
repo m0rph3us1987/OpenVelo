@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { requireAuth, requireAdmin, requireProjectAccess } from './middleware/auth';
 import { authRouter } from './routes/auth';
 import { settingsRouter } from './routes/settings';
@@ -16,6 +17,7 @@ import { createChatSession, getChatSession, deleteChatSession, getChatDir } from
 import { runWorkflow } from '../lib/workflow';
 import { serveRegistry } from '../lib/opencode-serve-registry';
 import { wsManager } from '../lib/websocket-manager';
+import { unmountGbfsIfMounted } from '../lib/repo-clone';
 
 export const apiRouter = Router();
 
@@ -94,7 +96,7 @@ apiRouter.post('/chatOpen', requireProjectAccess, (req: Request, res: Response) 
   res.json({ success: true, chat });
 });
 
-apiRouter.post('/chatDelete', requireProjectAccess, (req: Request, res: Response) => {
+apiRouter.post('/chatDelete', requireProjectAccess, async (req: Request, res: Response) => {
   const body = req.body;
   console.log(`[${new Date().toISOString()}] POST /api/chatDelete - body:`, JSON.stringify(body));
 
@@ -119,6 +121,7 @@ apiRouter.post('/chatDelete', requireProjectAccess, (req: Request, res: Response
 
   // 2. Delete chat directory
   const chatDir = getChatDir(chatId, chat.project_id);
+  await unmountGbfsIfMounted(path.join(chatDir, 'repository'));
   console.log(`[${new Date().toISOString()}] chatDelete - deleting chat directory: ${chatDir}`);
   if (fs.existsSync(chatDir)) {
     fs.rmSync(chatDir, { recursive: true, force: true });

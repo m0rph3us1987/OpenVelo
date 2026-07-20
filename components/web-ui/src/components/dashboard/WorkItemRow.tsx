@@ -2,6 +2,7 @@ import * as React from 'react';
 import { ChevronRight, Pencil, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StateBadge } from './StateBadge';
+import { JobTypeBadge } from './JobTypeBadge';
 import { DependencyBadge } from './DependencyBadge';
 import { cn } from '@/lib/utils';
 import type { Job } from '@/lib/types';
@@ -18,7 +19,7 @@ interface WorkItemRowProps {
   onDragStart?: (e: React.DragEvent<HTMLDivElement>, job: Job) => void;
 }
 
-export function WorkItemRow({ job, maxRetries, dockerImage, selected = false, onSelectedChange, onEdit, onOpenDetails, draggable, onDragStart }: WorkItemRowProps) {
+export function WorkItemRow({ job, maxRetries, selected = false, onSelectedChange, onEdit, onOpenDetails, draggable, onDragStart }: WorkItemRowProps) {
   const isRunning = job.status === 'RUNNING';
 
   async function handleReset(e: React.MouseEvent) {
@@ -78,6 +79,7 @@ export function WorkItemRow({ job, maxRetries, dockerImage, selected = false, on
         </div>
         <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
           <StateBadge status={job.status} />
+          <JobTypeBadge type={job.type ?? 'implementation'} />
           {isRunning && job.stage && (
             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary/15 text-primary capitalize">
               {job.stage}

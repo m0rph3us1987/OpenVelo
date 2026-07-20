@@ -16,7 +16,7 @@ REPOSITORY PATH: {REPO_DIR}
 
 SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
 First, read the user's requirements and repository context to ground your questions.
-- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the domain area the user is discussing, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. Based on the domain area the user is discussing, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
 - Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack being discussed, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 The implementing agent will follow these skills and architectural rules — your output must be compatible.
 

@@ -18,7 +18,8 @@ import {
   deletePlanDataByChatId,
   getRequirementOutlines,
 } from '@/lib/db';
-import { transitionTo, runWorkflow } from '@/lib/workflow';
+import { transitionTo, runWorkflow, cancelWorkflow } from '@/lib/workflow';
+import { cleanupCancelledPlanArtifacts } from '@/lib/workflow/artifacts';
 import { requireProjectAccess } from '../middleware/auth';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { wsManager } from '@/lib/websocket-manager';
@@ -438,7 +439,7 @@ chatsRouter.get('/:chatId/requirement/outlines', requireProjectAccess, (req, res
   }
 });
 
-chatsRouter.post('/:chatId/stop', requireProjectAccess, (req, res) => {
+chatsRouter.post('/:chatId/stop', requireProjectAccess, async (req, res) => {
   const chatId = Number(req.params.chatId);
   const chat = getChatSession(chatId);
   if (!chat) {
@@ -446,23 +447,57 @@ chatsRouter.post('/:chatId/stop', requireProjectAccess, (req, res) => {
     return;
   }
 
+  // 1. Signal any in-flight stage handler so cooperative aborts fire
+  //    before we tear down the underlying serve process.
+  const cancelResult = await cancelWorkflow(chatId);
+
+  // 2. Try to abort active opencode sessions gracefully so the upstream
+  //    agent can break out cleanly rather than just letting the socket die.
+  const activeStages = ['plan-discovery', 'plan-generation', 'plan-test'];
+  for (const stage of activeStages) {
+    const sessionId = serveRegistry.getSession(chatId, stage);
+    if (sessionId) {
+      await serveRegistry.abortSession(chatId, sessionId);
+    }
+  }
+
+  // 3. Tear down the kilo serve process.
   serveRegistry.shutdown(chatId);
-  updateChatSession(chatId, { running: 0 });
+
+  // 4. Clean up partial artifacts written by the cancelled run so the next
+  //    /resume starts from a known state.
+  const chatDir = getChatDir(chatId, chat.project_id);
+  cleanupCancelledPlanArtifacts(chatId, chatDir, chat.stage);
+
+  // 5. Flip running flag and broadcast the cancelled state.
+  const updated = updateChatSession(chatId, { running: 0 });
+  if (!updated) {
+    res.status(500).json({ error: 'Failed to update chat session' });
+    return;
+  }
+
+  // Restore the chat to its pre-error (i.e. pre-run) sub_stage so the UI can
+  // surface a "cancelled" state distinct from "error". If sub_stage_pre_error
+  // is empty (very first run), keep the current sub_stage.
+  const targetSubStage = chat.sub_stage_pre_error || chat.sub_stage;
+  updateChatSession(chatId, { sub_stage: targetSubStage, error_type: null });
 
   wsManager.broadcastToProject(chat.project_id, {
     type: 'chat_updated',
     chatId: chatId,
     stage: chat.stage,
-    sub_stage: chat.sub_stage,
+    sub_stage: targetSubStage,
     running: 0,
+    status: 'cancelled',
   });
 
   stageWsManager.broadcastToStage(chatId, chat.stage, {
     type: 'running_status',
     running: false,
+    status: 'cancelled',
   });
 
-  res.json({ success: true });
+  res.json({ success: true, cancelled: cancelResult.cancelled });
 });
 
 chatsRouter.post('/:chatId/resume', requireProjectAccess, (req, res) => {

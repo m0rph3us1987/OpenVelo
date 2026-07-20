@@ -25,7 +25,7 @@ export function ProjectLayout() {
     refreshProject();
   }, [projectId]);
 
-  const liveStatus = useProjectStatus(projectId);
+  const { status: liveStatus, refreshSafe: refreshLiveStatus } = useProjectStatus(projectId);
 
   React.useEffect(() => {
     if (project) setProject({ ...project, status: liveStatus });
@@ -43,7 +43,7 @@ export function ProjectLayout() {
       <div className="flex-1 flex overflow-hidden">
         <ProjectSidebar projectId={projectId} onSettingsClick={() => setSettingsOpen(true)} />
         <main className="flex-1 overflow-hidden">
-          <Outlet context={{ project, projectId, liveStatus }} />
+          <Outlet context={{ project, projectId, liveStatus, refreshLiveStatus }} />
         </main>
       </div>
 

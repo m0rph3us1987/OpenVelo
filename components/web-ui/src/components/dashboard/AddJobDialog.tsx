@@ -6,6 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { Job } from '@/lib/types';
 
@@ -47,6 +54,7 @@ export function AddJobDialog({
 
   const [title, setTitle] = React.useState('');
   const [description, setDescription] = React.useState('');
+  const [jobType, setJobType] = React.useState<'implementation' | 'test'>('implementation');
   const [selectedDeps, setSelectedDeps] = React.useState<string[]>([]);
   const [depSearch, setDepSearch] = React.useState('');
   const [depDropdownOpen, setDepDropdownOpen] = React.useState(false);
@@ -59,6 +67,7 @@ export function AddJobDialog({
       setTitle(editJob.title ?? '');
       // Strip HTML tags for plain-text editing
       setDescription(stripHtml(editJob.description ?? ''));
+      setJobType(editJob.type === 'test' ? 'test' : 'implementation');
       const deps = editJob.depends_on
         ? (() => { try { return JSON.parse(editJob.depends_on!) as string[]; } catch { return [editJob.depends_on!]; } })()
         : [];
@@ -85,6 +94,7 @@ export function AddJobDialog({
   function resetForm() {
     setTitle('');
     setDescription('');
+    setJobType('implementation');
     setSelectedDeps([]);
     setDepSearch('');
     setDepDropdownOpen(false);
@@ -130,6 +140,7 @@ export function AddJobDialog({
         title: title.trim(),
         description: description.trim() || null,
         dependsOn: selectedDeps.length > 0 ? selectedDeps : null,
+        type: jobType,
       };
 
       const res = isEdit
@@ -190,6 +201,18 @@ export function AddJobDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
+          </div>
+
+          {/* Job Type */}
+          <div className="space-y-1.5">
+            <Label htmlFor="add-job-type">Job Type</Label>
+            <Select value={jobType} onValueChange={(v) => setJobType(v === 'test' ? 'test' : 'implementation')}>
+              <SelectTrigger id="add-job-type"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="implementation">Implementation</SelectItem>
+                <SelectItem value="test">Test</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
 

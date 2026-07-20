@@ -11,7 +11,7 @@ To have OpenVelo operate on its own codebase, we must first register it as a pro
 ### 1.1 General Settings
 Navigate to **New Project** and enter the configuration details:
 - **Project Name**: `OpenVelo` (or a descriptive name for your self-hosting instance).
-- **Repository URL & Host**: Select your repository host (in this example, a local **Gitea** instance) and supply the Git clone URL along with your Personal Access Token (PAT).
+- **Repository URL & Host**: Select your repository host (in this example, a local **Gitea** instance) and supply the Git URL along with your Personal Access Token (PAT).
 - **Working Branch**: Set the target branch for agent pull requests (e.g., `staging`).
 
 [![General Settings](images/tutorial/01_00_General.png)](images/tutorial/01_00_General.png)
@@ -119,7 +119,7 @@ The execution dashboard loads the user stories, displaying prerequisite dependen
 [![Dashboard Job List](images/tutorial/03_00_JobList.png)](images/tutorial/03_00_JobList.png)
 
 ### 3.2 Spawning Agent Containers
-Start the execution. The Orchestrator maps network modes and mounts, launches a dedicated container for the active job, clones the OpenVelo codebase inside it, and streams live terminal logs directly to your dashboard.
+Start the execution. The Orchestrator maps network modes and mounts, launches a dedicated container for the active job, mounts the OpenVelo codebase via GBFS inside it, and streams live terminal logs directly to your dashboard.
 
 [![Running Job Log Stream](images/tutorial/03_01_Running.png)](images/tutorial/03_01_Running.png)
 

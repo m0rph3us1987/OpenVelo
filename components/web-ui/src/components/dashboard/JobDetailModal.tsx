@@ -3,8 +3,6 @@ import {
   X,
   Check,
   RotateCcw,
-  Trash2,
-  Pencil,
   Terminal,
   Info,
   Loader2,
@@ -14,16 +12,19 @@ import {
   Square,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
+  Monitor,
+  Trash2,
 } from 'lucide-react';
 import { LogViewer } from './LogViewer';
 import { StateBadge } from './StateBadge';
+import { JobTypeBadge } from './JobTypeBadge';
 import { parseSqliteDate, cn } from '@/lib/utils';
 import { useJobWebSocket } from '@/hooks/useJobWebSocket';
-import { wsManager, WsKeys } from '@/lib/websocket-manager';
+import { wsManager } from '@/lib/websocket-manager';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
-  DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -40,14 +41,7 @@ import type {
   WsJobUpdateMessage,
 } from '@/lib/types';
 import { useToast } from '@/context/ToastContext';
-
-interface JobDetailModalProps {
-  job: Job;
-  dockerImage?: string;
-  maxRetries: number;
-  onClose: () => void;
-  onEdit?: () => void;
-}
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 function elapsed(dateStr: string, _now?: number): string {
   const d = parseSqliteDate(dateStr);
@@ -66,7 +60,38 @@ function formatNumber(n: number | undefined): string {
   return n.toLocaleString('en-US');
 }
 
-const PIPELINE_STAGES = [
+function parsePassedTests(raw: string | null | undefined): JobStatusPlanEntry[] | null {
+  if (!raw || raw.trim() === '') return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const tasks = (parsed && typeof parsed === 'object' && 'tasks' in parsed && Array.isArray(parsed.tasks)) 
+      ? parsed.tasks 
+      : (Array.isArray(parsed) ? parsed : null);
+
+    if (tasks && tasks.length > 0) {
+      let foundInProgress = false;
+      return tasks.map((t: any) => {
+        let status: 'completed' | 'in_progress' | 'pending' = 'pending';
+        if (t.verdict === 'pass' || (t.verdict !== 'fail' && t.status === 'completed')) {
+          status = 'completed';
+        } else if (!foundInProgress) {
+          status = 'in_progress';
+          foundInProgress = true;
+        }
+        return {
+          content: t.task || t.content || '',
+          status,
+          priority: t.priority || 'medium',
+        };
+      });
+    }
+  } catch (e) {
+    console.error("Failed to parse passed_tests:", e);
+  }
+  return null;
+}
+
+const IMPLEMENTER_PIPELINE_STAGES = [
   { key: 'setup', label: 'Setup' },
   { key: 'blueprinting', label: 'Blueprint' },
   { key: 'implementing', label: 'Implementing' },
@@ -76,9 +101,23 @@ const PIPELINE_STAGES = [
   { key: 'pushing', label: 'Push' },
 ] as const;
 
-function stageIndex(stage: string | null | undefined): number {
+const TESTER_PIPELINE_STAGES = [
+  { key: 'setup', label: 'Setup' },
+  { key: 'planning', label: 'Planning' },
+  { key: 'testing', label: 'Test' },
+  { key: 'verdict', label: 'Verdict' },
+] as const;
+
+type PipelineStage = { key: string; label: string };
+type JobType = 'implementation' | 'test';
+
+function stagesForJobType(jobType: JobType | string | null | undefined): readonly PipelineStage[] {
+  return jobType === 'test' ? TESTER_PIPELINE_STAGES : IMPLEMENTER_PIPELINE_STAGES;
+}
+
+function stageIndex(stages: readonly PipelineStage[], stage: string | null | undefined): number {
   if (!stage) return -1;
-  return PIPELINE_STAGES.findIndex((s) => s.key === stage);
+  return stages.findIndex((s) => s.key === stage);
 }
 
 function PipelineTimeline({
@@ -86,13 +125,16 @@ function PipelineTimeline({
   stage,
   agentAttempt,
   agentMaxRetries,
+  jobType,
 }: {
   status: string;
   stage: string | null | undefined;
   agentAttempt?: number | null;
   agentMaxRetries?: number | null;
+  jobType?: JobType | string | null;
 }) {
-  const activeIdx = stageIndex(stage);
+  const stages = stagesForJobType(jobType);
+  const activeIdx = stageIndex(stages, stage);
 
   return (
     <div className="p-4 border border-border bg-card/40 rounded-xl">
@@ -100,19 +142,9 @@ function PipelineTimeline({
         Pipeline Execution Stages
       </p>
       <div className="flex items-center gap-0">
-        {PIPELINE_STAGES.map((s, idx) => {
-          let isComplete = false;
-          let isActive = false;
-
-          if (status === 'COMPLETED') {
-            isComplete = true;
-          } else if (status === 'PENDING') {
-            isComplete = false;
-            isActive = false;
-          } else {
-            isComplete = idx < activeIdx;
-            isActive = idx === activeIdx && status !== 'STOPPED';
-          }
+        {stages.map((s, idx) => {
+          const isComplete = status === 'COMPLETED' ? true : status === 'PENDING' ? false : idx < activeIdx;
+          const isActive = status === 'COMPLETED' || status === 'PENDING' ? false : idx === activeIdx && status !== 'STOPPED';
 
           return (
             <React.Fragment key={s.key}>
@@ -144,7 +176,7 @@ function PipelineTimeline({
                 )}
               </div>
 
-              {idx < PIPELINE_STAGES.length - 1 && (
+              {idx < stages.length - 1 && (
                 <div
                   className={[
                     'h-0.5 flex-1 mx-1 mb-5 transition-colors duration-300',
@@ -501,8 +533,57 @@ const InfoDialogContent = React.forwardRef<
 ));
 InfoDialogContent.displayName = 'InfoDialogContent';
 
-export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }: JobDetailModalProps) {
+export interface JobDetailContentProps {
+  job: Job;
+  dockerImage?: string;
+  maxRetries: number;
+  onClose: () => void;
+  variant?: 'modal' | 'stacked';
+  onEdit?: () => void;
+  onDeleted?: () => void;
+}
+
+export function JobDetailContent(props: JobDetailContentProps) {
+  return <JobDetailContentBody {...props} />;
+}
+
+export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit, onDeleted }: JobDetailContentProps) {
+  const glowStyles = {
+    PENDING: 'shadow-[0_0_50px_rgba(245,158,11,0.15)] border-amber-500/20',
+    RUNNING: 'shadow-[0_0_50px_rgba(59,130,246,0.15)] border-blue-500/20',
+    COMPLETED: 'shadow-[0_0_50px_rgba(16,185,129,0.15)] border-green-500/20',
+    FAILED: 'shadow-[0_0_50px_rgba(239,68,68,0.15)] border-red-500/20',
+    STOPPED: 'shadow-[0_0_50px_rgba(100,116,139,0.15)] border-slate-500/20',
+  }[job.status] ?? 'shadow-2xl border-border';
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Job details cockpit"
+    >
+      <div className="absolute inset-0 bg-black/75" onClick={onClose} />
+      <div className={`relative w-[95vw] max-w-[1600px] aspect-[16/10] max-h-[92vh] bg-card/95 border rounded-2xl flex flex-col overflow-hidden transition-all duration-300 ${glowStyles}`}>
+        <JobDetailContentBody
+          job={job}
+          dockerImage={dockerImage}
+          maxRetries={maxRetries}
+          onClose={onClose}
+          onEdit={onEdit}
+          onDeleted={onDeleted}
+        />
+      </div>
+    </div>
+  );
+}
+
+function JobDetailContentBody({ job, dockerImage, maxRetries, onClose, variant = 'modal', onEdit, onDeleted }: JobDetailContentProps) {
   const { showToast } = useToast();
+  const isMobile = useIsMobile();
+  const MobileJobInfoSheet = React.lazy(() =>
+    import('@/components/mobile/jobs/MobileJobInfoSheet').then((m) => ({ default: m.MobileJobInfoSheet }))
+  );
   const [now, setNow] = React.useState(Date.now());
   const [containerLogs, setContainerLogs] = React.useState<string | null>(null);
   const [logsLoading, setLogsLoading] = React.useState(false);
@@ -542,6 +623,19 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
       .catch(() => { /* offline orchestrator — fall back to DB */ });
     return () => { cancelled = true; };
   }, [job.project_id, job.id]);
+
+  React.useEffect(() => {
+    if (job.status === 'PENDING' && job.type === 'test' && job.passed_tests) {
+      const parsed = parsePassedTests(job.passed_tests);
+      if (parsed) {
+        setLivePlan(parsed);
+        return;
+      }
+    }
+    if (job.status === 'PENDING' && !job.passed_tests) {
+      setLivePlan(null);
+    }
+  }, [job.status, job.type, job.passed_tests]);
 
   // Subscribe to project WS for live broadcasts
   React.useEffect(() => {
@@ -619,12 +713,13 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
       .finally(() => setLogsLoading(false));
   }, [showContainerLogs, job.project_id, job.id]);
 
-  async function handleReset() {
+  async function handleResetPlan() {
     setIsActionPending(true);
     try {
-      const res = await fetch(`/api/projects/${job.project_id}/jobs/${job.id}/reset`, { method: 'POST' });
+      const res = await fetch(`/api/projects/${job.project_id}/jobs/${job.id}/reset-plan`, { method: 'POST' });
       if (res.ok) {
-        showToast('Job reset successfully', 'success');
+        showToast('Plan reset successfully', 'success');
+        setLivePlan(null);
       } else {
         const data = await res.json().catch(() => ({}));
         showToast(data.error ?? 'Reset failed', 'error');
@@ -636,21 +731,15 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
     }
   }
 
-  async function handleDelete() {
-    if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return;
+  async function handleReset() {
     setIsActionPending(true);
     try {
-      const res = await fetch(`/api/projects/${job.project_id}/jobs`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobIds: [job.id] }),
-      });
+      const res = await fetch(`/api/projects/${job.project_id}/jobs/${job.id}/reset`, { method: 'POST' });
       if (res.ok) {
-        showToast('Job deleted successfully', 'success');
-        onClose();
+        showToast('Job reset successfully', 'success');
       } else {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error ?? 'Delete failed', 'error');
+        showToast(data.error ?? 'Reset failed', 'error');
       }
     } catch (err) {
       showToast(String(err), 'error');
@@ -678,6 +767,32 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
     }
   }
 
+  async function handleDeleteJob() {
+    if (!window.confirm('Are you sure you want to delete this job?')) return;
+    setIsActionPending(true);
+    try {
+      const res = await fetch(`/api/projects/${job.project_id}/jobs`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobIds: [job.id] }),
+      });
+      if (res.ok) {
+        showToast('Job deleted successfully', 'success');
+        if (onDeleted) {
+          onDeleted();
+        }
+        onClose();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? 'Delete failed', 'error');
+      }
+    } catch (err) {
+      showToast(String(err), 'error');
+    } finally {
+      setIsActionPending(false);
+    }
+  }
+
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -685,14 +800,6 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
-
-  const glowStyles = {
-    PENDING: 'shadow-[0_0_50px_rgba(245,158,11,0.15)] border-amber-500/20',
-    RUNNING: 'shadow-[0_0_50px_rgba(59,130,246,0.15)] border-blue-500/20',
-    COMPLETED: 'shadow-[0_0_50px_rgba(16,185,129,0.15)] border-green-500/20',
-    FAILED: 'shadow-[0_0_50px_rgba(239,68,68,0.15)] border-red-500/20',
-    STOPPED: 'shadow-[0_0_50px_rgba(100,116,139,0.15)] border-slate-500/20',
-  }[job.status] ?? 'shadow-2xl border-border';
 
   const accentBarStyles = {
     PENDING: 'bg-amber-500',
@@ -702,176 +809,356 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
     STOPPED: 'bg-slate-500',
   }[job.status] ?? 'bg-border';
 
-  const hasDetails = !!job.description;
+  const header = (
+    <div
+      className={cn(
+        'flex shrink-0 items-center justify-between border-b border-border bg-muted/20',
+        variant === 'stacked'
+          ? 'sticky top-0 z-10 gap-2 px-3 py-2'
+          : 'px-6 py-4'
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {variant === 'stacked' && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Back to jobs"
+            className="tap-target inline-flex shrink-0 items-center justify-center rounded-md active:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+        )}
+        <span className="shrink-0 text-xs font-mono text-muted-foreground font-semibold px-2 py-0.5 rounded bg-muted/80">
+          #{job.id}
+        </span>
+        <h2
+          className={cn(
+            'truncate font-semibold text-foreground leading-snug',
+            variant === 'stacked' ? 'text-mobile-h3' : 'text-base'
+          )}
+        >
+          {job.title || 'Untitled Job'}
+        </h2>
+        <StateBadge status={job.status} />
+        <JobTypeBadge type={job.type ?? 'implementation'} />
+        <button
+          onClick={() => setInfoOpen(true)}
+          className={cn(
+            'text-muted-foreground hover:text-foreground active:bg-accent transition-colors rounded',
+            variant === 'stacked' ? 'tap-target' : 'p-1 hover:bg-muted/80'
+          )}
+          aria-label="Show job description"
+          title="Show job description"
+        >
+          <Info className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className={cn('flex shrink-0 items-center', variant === 'stacked' ? 'gap-1' : 'gap-3 ml-4')}>
+        {variant === 'modal' && job.status !== 'RUNNING' && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleDeleteJob}
+            disabled={isActionPending}
+            className="flex items-center gap-1.5"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete
+          </Button>
+        )}
+        {variant === 'modal' && job.status === 'PENDING' && job.type === 'test' && job.passed_tests && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleResetPlan}
+            disabled={isActionPending}
+            className="flex items-center gap-1.5"
+          >
+            Rest plan
+          </Button>
+        )}
+        {variant === 'modal' && job.status !== 'COMPLETED' && job.status !== 'PENDING' && (
+          <>
+            {job.status === 'RUNNING' ? (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleCancel}
+                disabled={isActionPending}
+                className="flex items-center gap-1.5"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                Stop
+              </Button>
+            ) : job.status === 'STOPPED' ? (
+              <Button
+                className="bg-green-600 hover:bg-green-700 text-white font-medium flex items-center gap-1.5"
+                size="sm"
+                onClick={handleReset}
+                disabled={isActionPending}
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                Start
+              </Button>
+            ) : job.status === 'FAILED' ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleReset}
+                disabled={isActionPending}
+                className="flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Retry
+              </Button>
+            ) : null}
+          </>
+        )}
+
+        {variant === 'modal' && (
+          <button
+            onClick={onClose}
+            className="text-muted-foreground hover:text-foreground transition-colors p-1.5 hover:bg-muted/80 rounded-lg"
+            aria-label="Close modal"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const metadataStrip = (
+    <div
+      className={cn(
+        'flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground',
+        variant === 'stacked' ? 'border-b border-border px-3 py-2' : 'mt-1'
+      )}
+    >
+      {isRunning ? (
+        <span className="flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
+          Running for: <span className="font-mono text-foreground font-medium">{elapsed(job.started_at ?? job.updated_at, now)}</span>
+        </span>
+      ) : job.status === 'COMPLETED' ? (
+        <span>Completed: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
+      ) : job.status === 'FAILED' ? (
+        <span className="text-red-400">Failed at: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
+      ) : job.status === 'STOPPED' ? (
+        <span className="text-slate-400">Stopped at: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
+      ) : (
+        <span>Created: <span className="text-foreground">{new Date(job.created_at).toLocaleString()}</span></span>
+      )}
+      {job.retry_count != null && (
+        <span>Container Try: <span className="text-foreground">{(isRunning && liveJobState && liveJobState.attempt > 0) ? liveJobState.attempt : job.retry_count + 1} / {(isRunning && liveJobState && liveJobState.maxAttempts > 1) ? liveJobState.maxAttempts : maxRetries}</span></span>
+      )}
+      {liveJobState?.startDateTime && (
+        <span>Agent started: <span className="text-foreground">{new Date(liveJobState.startDateTime).toLocaleString()}</span></span>
+      )}
+      {job.container_id && (
+        <span>Container: <span className="text-foreground font-mono select-all" title={job.container_id}>{job.container_id.substring(0, 12)}</span></span>
+      )}
+      {job.vnc_host_port && job.vnc_host_port > 0 && job.project_id != null && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-6 px-2 text-xs gap-1"
+          onClick={() => window.open(`/projects/${job.project_id}/jobs/${job.id}/vnc`, '_blank', 'noopener,noreferrer')}
+          title={`Open VNC viewer for job #${job.id} in a new tab (view-only)`}
+        >
+          <Monitor className="h-3 w-3" />
+          View VNC
+          <span className="font-mono text-[10px] text-muted-foreground">:{job.vnc_host_port}</span>
+        </Button>
+      )}
+      {(isRunning || !!job.container_id) && (
+        <span>Image: <span className="text-foreground font-mono" title={dockerImage ?? 'node:18-alpine'}>{dockerImage ?? 'node:18-alpine'}</span></span>
+      )}
+      {job.status !== 'RUNNING' && job.status !== 'PENDING' && (
+        <span>Runtime: <span className="text-foreground font-mono">
+          {(() => {
+            const secs = job.runtime || 0;
+            const hrs = Math.floor(secs / 3600);
+            const mins = Math.floor((secs % 3600) / 60);
+            const s = secs % 60;
+            return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+          })()}
+        </span></span>
+      )}
+    </div>
+  );
+
+  const logsBlock = (
+    <div
+      className={cn(
+        'flex min-h-0 flex-col overflow-hidden border border-border rounded-xl bg-card/50'
+      )}
+    >
+      {isRunning ? (
+        <LogViewer
+          liveLogs={liveLogs}
+          className="flex-1 min-h-0 h-auto"
+        />
+      ) : showContainerLogs ? (
+        logsLoading ? (
+          <div className="flex-1 flex flex-col items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10">
+            <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2" />
+            Loading logs from container...
+          </div>
+        ) : containerLogs ? (
+          <LogViewer
+            logs={containerLogs}
+            className="flex-1 min-h-0 h-auto"
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10 italic">
+            Container no longer available (No logs saved).
+          </div>
+        )
+      ) : job.status === 'PENDING' ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-muted-foreground font-mono bg-muted/10">
+          <Terminal className="w-8 h-8 opacity-30 mb-2 animate-pulse text-amber-500" />
+          <span className="text-xs font-semibold text-foreground/80 mb-1">Job is Waiting in Queue</span>
+          <span className="text-[11px] max-w-[320px] leading-relaxed">
+            This job is pending execution. Once the orchestrator provisions an active agent worker, logs will stream here live.
+          </span>
+        </div>
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10 italic">
+          No logs available for this job state.
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-[60] flex items-center justify-center p-4"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Job details cockpit"
-      >
-        <div className="absolute inset-0 bg-black/75" onClick={onClose} />
+      <div className={`h-[4px] w-full shrink-0 ${accentBarStyles}`} />
+      {header}
 
-        <div className={`relative w-[95vw] max-w-[1600px] aspect-[16/10] max-h-[92vh] bg-card/95 border rounded-2xl flex flex-col overflow-hidden transition-all duration-300 ${glowStyles}`}>
-          <div className={`h-[4px] w-full shrink-0 ${accentBarStyles}`} />
+      {variant === 'stacked' ? (
+        <>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
+            {metadataStrip}
+            <div className="flex min-h-[280px] flex-col">{logsBlock}</div>
+            <PipelineTimeline
+              status={job.status}
+              stage={liveJobState?.stage ?? job.stage}
+              agentAttempt={liveJobState?.agentAttempt ?? job.agent_attempt}
+              agentMaxRetries={liveJobState?.agentMaxRetries ?? job.agent_max_retries}
+              jobType={job.type}
+            />
 
-          {/* Header (unchanged + Info button) */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0 bg-muted/20">
-            <div className="min-w-0 flex-1 space-y-1">
-              <div className="flex items-center gap-3">
-                <span className="text-xs font-mono text-muted-foreground font-semibold px-2 py-0.5 rounded bg-muted/80">
-                  #{job.id}
-                </span>
-                <h2 className="text-base font-semibold text-foreground leading-snug truncate">
-                  {job.title || 'Untitled Job'}
-                </h2>
-                <StateBadge status={job.status} />
-                <button
-                  onClick={() => setInfoOpen(true)}
-                  className="text-muted-foreground hover:text-foreground transition-colors p-1 hover:bg-muted/80 rounded"
-                  aria-label="Show job description"
-                  title="Show job description"
-                >
-                  <Info className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                {isRunning ? (
-                  <span className="flex items-center gap-1">
-                    <span className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
-                    Running for: <span className="font-mono text-foreground font-medium">{elapsed(job.started_at ?? job.updated_at, now)}</span>
-                  </span>
-                ) : job.status === 'COMPLETED' ? (
-                  <span>Completed: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
-                ) : job.status === 'FAILED' ? (
-                  <span className="text-red-400">Failed at: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
-                ) : job.status === 'STOPPED' ? (
-                  <span className="text-slate-400">Stopped at: <span className="text-foreground">{new Date(job.updated_at).toLocaleString()}</span></span>
-                ) : (
-                  <span>Created: <span className="text-foreground">{new Date(job.created_at).toLocaleString()}</span></span>
-                )}
-                {job.retry_count != null && (
-                  <span>Container Try: <span className="text-foreground">{(isRunning && liveJobState && liveJobState.attempt > 0) ? liveJobState.attempt : job.retry_count + 1} / {(isRunning && liveJobState && liveJobState.maxAttempts > 1) ? liveJobState.maxAttempts - 1 : maxRetries}</span></span>
-                )}
-                {liveJobState?.startDateTime && (
-                  <span>Agent started: <span className="text-foreground">{new Date(liveJobState.startDateTime).toLocaleString()}</span></span>
-                )}
-                {job.container_id && (
-                  <span>Container: <span className="text-foreground font-mono select-all" title={job.container_id}>{job.container_id.substring(0, 12)}</span></span>
-                )}
-                {(isRunning || !!job.container_id) && (
-                  <span>Image: <span className="text-foreground font-mono" title={dockerImage ?? 'node:18-alpine'}>{dockerImage ?? 'node:18-alpine'}</span></span>
-                )}
-                {job.status !== 'RUNNING' && job.status !== 'PENDING' && (
-                  <span>Runtime: <span className="text-foreground font-mono">
-                    {(() => {
-                      const secs = job.runtime || 0;
-                      const hrs = Math.floor(secs / 3600);
-                      const mins = Math.floor((secs % 3600) / 60);
-                      const s = secs % 60;
-                      return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-                    })()}
-                  </span></span>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3 shrink-0 ml-4">
-              {job.status !== 'COMPLETED' && job.status !== 'PENDING' && (
-                <>
-                  {job.status === 'RUNNING' ? (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={handleCancel}
-                      disabled={isActionPending}
-                      className="flex items-center gap-1.5"
-                    >
-                      <Square className="w-3.5 h-3.5 fill-current" />
-                      Stop
-                    </Button>
-                  ) : job.status === 'STOPPED' ? (
-                    <Button
-                      className="bg-green-600 hover:bg-green-700 text-white font-medium flex items-center gap-1.5"
-                      size="sm"
-                      onClick={handleReset}
-                      disabled={isActionPending}
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      Start
-                    </Button>
-                  ) : job.status === 'FAILED' ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleReset}
-                      disabled={isActionPending}
-                      className="flex items-center gap-1.5"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Retry
-                    </Button>
-                  ) : null}
-                </>
-              )}
-
-              <button
-                onClick={onClose}
-                className="text-muted-foreground hover:text-foreground transition-colors p-1.5 hover:bg-muted/80 rounded-lg"
-                aria-label="Close modal"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+            <UsagePanel
+              usage={liveUsage}
+              isExpanded={expandedPanel === 'usage'}
+              onExpand={() => setExpandedPanel('usage')}
+            />
+            <PlanPanel
+              entries={livePlan}
+              isExpanded={expandedPanel === 'plan'}
+              onExpand={() => setExpandedPanel('plan')}
+            />
           </div>
-
-          {/* Body: 70% Left (logs) / 30% Right (Stepper, Usage, Plan) */}
+          <div
+            data-testid="mobile-job-action-bar"
+            className="shrink-0 border-t border-border bg-background p-3 pb-safe-bottom sticky bottom-0 flex gap-2"
+          >
+            {job.status !== 'COMPLETED' && job.status !== 'PENDING' ? (
+              job.status === 'RUNNING' ? (
+                <Button
+                  variant="destructive"
+                  onClick={handleCancel}
+                  disabled={isActionPending}
+                  className="w-full tap-target-lg h-12 flex items-center justify-center gap-2"
+                >
+                  <Square className="w-4 h-4 fill-current" />
+                  Stop
+                </Button>
+              ) : job.status === 'STOPPED' ? (
+                <>
+                  <Button
+                    className="w-1/2 tap-target-lg h-12 bg-green-600 hover:bg-green-700 text-white font-medium flex items-center justify-center gap-2"
+                    onClick={handleReset}
+                    disabled={isActionPending}
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    Start
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleDeleteJob}
+                    disabled={isActionPending}
+                    className="w-1/2 tap-target-lg h-12 border-destructive text-destructive hover:bg-destructive/10 bg-transparent flex items-center justify-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </Button>
+                </>
+              ) : job.status === 'FAILED' ? (
+                <>
+                  <Button
+                    variant="outline"
+                    onClick={handleReset}
+                    disabled={isActionPending}
+                    className="w-1/2 tap-target-lg h-12 flex items-center justify-center gap-2"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    Retry
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleDeleteJob}
+                    disabled={isActionPending}
+                    className="w-1/2 tap-target-lg h-12 border-destructive text-destructive hover:bg-destructive/10 bg-transparent flex items-center justify-center gap-2"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </Button>
+                </>
+              ) : null
+            ) : job.status === 'PENDING' && job.type === 'test' && job.passed_tests ? (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={handleResetPlan}
+                  disabled={isActionPending}
+                  className="w-1/2 tap-target-lg h-12 flex items-center justify-center gap-2"
+                >
+                  Rest plan
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDeleteJob}
+                  disabled={isActionPending}
+                  className="w-1/2 tap-target-lg h-12 border-destructive text-destructive hover:bg-destructive/10 bg-transparent flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="destructive"
+                onClick={handleDeleteJob}
+                disabled={isActionPending}
+                className="w-full tap-target-lg h-12 flex items-center justify-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete
+              </Button>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="px-6 pt-1">{metadataStrip}</div>
           <div className="flex-1 flex min-h-0 overflow-hidden">
-            {/* Left 70% — Logs */}
             <div className="w-[70%] flex flex-col p-6 border-r border-border min-h-0 overflow-hidden">
-
-
-              <div className="flex-1 min-h-0 h-full border border-border rounded-xl overflow-hidden bg-card/50 flex flex-col">
-                {isRunning ? (
-                  <LogViewer
-                    liveLogs={liveLogs}
-                    className="flex-1 min-h-0 h-auto"
-                  />
-                ) : showContainerLogs ? (
-                  logsLoading ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10">
-                      <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin mb-2" />
-                      Loading logs from container...
-                    </div>
-                  ) : containerLogs ? (
-                    <LogViewer
-                      logs={containerLogs}
-                      className="flex-1 min-h-0 h-auto"
-                    />
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10 italic">
-                      Container no longer available (No logs saved).
-                    </div>
-                  )
-                ) : job.status === 'PENDING' ? (
-                  <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-muted-foreground font-mono bg-muted/10">
-                    <Terminal className="w-8 h-8 opacity-30 mb-2 animate-pulse text-amber-500" />
-                    <span className="text-xs font-semibold text-foreground/80 mb-1">Job is Waiting in Queue</span>
-                    <span className="text-[11px] max-w-[320px] leading-relaxed">
-                      This job is pending execution. Once the orchestrator provisions an active agent worker, logs will stream here live.
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground font-mono bg-muted/10 italic">
-                    No logs available for this job state.
-                  </div>
-                )}
-              </div>
+              {logsBlock}
             </div>
-
-            {/* Right 30% — Stepper, Usage, Plan */}
             <div className="w-[30%] flex flex-col p-4 gap-3 min-h-0 overflow-hidden bg-card/25">
               <div className="shrink-0">
                 <PipelineTimeline
@@ -879,7 +1166,9 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
                   stage={liveJobState?.stage ?? job.stage}
                   agentAttempt={liveJobState?.agentAttempt ?? job.agent_attempt}
                   agentMaxRetries={liveJobState?.agentMaxRetries ?? job.agent_max_retries}
+                  jobType={job.type}
                 />
+
               </div>
               <UsagePanel
                 usage={liveUsage}
@@ -893,10 +1182,16 @@ export function JobDetailModal({ job, dockerImage, maxRetries, onClose, onEdit }
               />
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
 
-      <JobInfoModal job={job} open={infoOpen} onOpenChange={setInfoOpen} />
+      {isMobile
+        ? (
+          <React.Suspense fallback={null}>
+            <MobileJobInfoSheet job={job} open={infoOpen} onOpenChange={setInfoOpen} />
+          </React.Suspense>
+        )
+        : <JobInfoModal job={job} open={infoOpen} onOpenChange={setInfoOpen} />}
     </>
   );
 }

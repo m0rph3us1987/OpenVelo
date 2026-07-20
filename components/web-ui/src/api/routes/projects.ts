@@ -23,7 +23,6 @@ import {
   isUserAuthorizedForProject,
   getProjectsForUser,
   getPlanJobs,
-  getDb,
   updateJobStopped,
 } from '@/lib/db';
 import type { ProjectFormData, Project } from '@/lib/types';
@@ -35,8 +34,14 @@ import { requireProjectAccess } from '../middleware/auth';
 import bcrypt from 'bcryptjs';
 import path from 'path';
 import fs from 'fs';
-import { spawn, execSync, execFileSync } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import Docker from 'dockerode';
+import {
+  startOrAttachCloneJob,
+  getCloneJobStatus,
+  isProjectRepoCloned,
+  RepoCloneSettings,
+} from '@/lib/repo-clone';
 
 export const projectsRouter = Router();
 
@@ -80,7 +85,7 @@ function createDockerClient(): Docker {
 // ─── Projects CRUD ────────────────────────────────────────────────────────────
 
 projectsRouter.post('/validate', async (req, res) => {
-  const { id, name, port, repo_url, repo_pat, repo_host, docker_image, step } = req.body;
+  const { id, name, port, docker_image, docker_image_tester, step } = req.body;
   
   try {
     initDb();
@@ -108,20 +113,11 @@ projectsRouter.post('/validate', async (req, res) => {
       }
 
       case 'coding':
-      case 'planning': {
-        return res.json({ success: true });
-      }
-
+      case 'planning':
       case 'repo': {
-        if (repo_url) {
-          const finalUrl = generateFinalRepoURL(repo_url, repo_pat || '', repo_host || 'github');
-          try {
-            execFileSync('git', ['ls-remote', finalUrl], { stdio: 'ignore', timeout: 10000 });
-            return res.json({ success: true });
-          } catch {
-            return res.json({ success: false, message: 'Failed to connect to repository. Check URL and Token.' });
-          }
-        }
+        // Repository connectivity is no longer pre-checked here; the actual
+        // clone happens via POST /api/projects/:id/clone_repo and surfaces
+        // detailed errors over the project WebSocket channel.
         return res.json({ success: true });
       }
 
@@ -133,6 +129,19 @@ projectsRouter.post('/validate', async (req, res) => {
             return res.json({ success: true });
           } catch {
             return res.json({ success: false, message: `Docker image '${docker_image}' not found locally.` });
+          }
+        }
+        return res.json({ success: true });
+      }
+
+      case 'docker_tester': {
+        if (docker_image_tester) {
+          const docker = createDockerClient();
+          try {
+            await docker.getImage(docker_image_tester).inspect();
+            return res.json({ success: true });
+          } catch {
+            return res.json({ success: false, message: `Docker image '${docker_image_tester}' not found locally.` });
           }
         }
         return res.json({ success: true });
@@ -199,6 +208,7 @@ projectsRouter.post('/', async (req, res) => {
       repo_url: body.repo_url ?? '',
       repo_pat: body.repo_pat || null,
       docker_image: body.docker_image || 'openvelo-agent:linux',
+      docker_image_tester: body.docker_image_tester || 'openvelo-tester:linux',
       backend: body.backend || 'opencode',
       default_model: body.default_model || '',
       execution_model: body.execution_model || '',
@@ -269,6 +279,7 @@ projectsRouter.put('/:id', requireProjectAccess, async (req, res) => {
       repo_url,
       repo_pat,
       docker_image,
+      docker_image_tester,
       backend,
       default_model,
       execution_model,
@@ -297,6 +308,7 @@ projectsRouter.put('/:id', requireProjectAccess, async (req, res) => {
     if (repo_url !== undefined) updates.repo_url = repo_url;
     if (repo_pat !== undefined) updates.repo_pat = repo_pat;
     if (docker_image !== undefined) updates.docker_image = docker_image;
+    if (docker_image_tester !== undefined) updates.docker_image_tester = docker_image_tester;
     if (backend !== undefined) updates.backend = backend;
     if (default_model !== undefined) updates.default_model = default_model;
     if (execution_model !== undefined) updates.execution_model = execution_model;
@@ -322,18 +334,51 @@ projectsRouter.put('/:id', requireProjectAccess, async (req, res) => {
     if (password) {
       updates.password_hash = await bcrypt.hash(password, 10);
     }
-    
+
     if (typeof remove_deleted_containers === 'boolean') {
       updates.remove_deleted_containers = remove_deleted_containers ? 1 : 0;
     }
-    
-    const project = updateProject(parseInt(id), updates);
+
+    const projectId = parseInt(id);
+    const project = updateProject(projectId, updates);
     if (!project) { res.status(404).json({ error: 'Not found' }); return; }
+
+    // If the orchestrator is currently running for this project, push the
+    // updated configuration over its WebSocket so the next job picks up
+    // the new models/repo/timeout values without requiring a restart.
+    pushConfigToOrchestrator(projectId);
+
     res.json(sanitizeProject(project));
   } catch (err) {
     res.status(500).json({ error: String(err) });
   }
 });
+
+/**
+ * Build the same `configure` payload that server.ts sends when an
+ * orchestrator first connects (see the `hello` handler there), and push
+ * it to the running orchestrator for `projectId` if one is connected.
+ * Returns true when the message was sent, false when there was no live
+ * orchestrator to update.
+ */
+function pushConfigToOrchestrator(projectId: number): boolean {
+  if (!isOrchestratorConnected(projectId)) return false;
+  const project = getProject(projectId);
+  if (!project) return false;
+  const models = getProjectModels(projectId);
+  const config = {
+    ...project,
+    execution_model: models.execution_model,
+    blueprint_model: models.blueprint_model,
+    review_model: models.review_model,
+    documentation_model: models.documentation_model,
+  };
+  const sent = sendToOrchestrator(projectId, { type: 'configure', config });
+  if (sent) {
+    console.log(`[projects] Pushed updated configure to running orchestrator for project ${projectId}`);
+  }
+  return sent;
+}
 
 projectsRouter.delete('/:id', requireProjectAccess, (req, res) => {
   if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
@@ -355,6 +400,72 @@ projectsRouter.get('/:id/status', requireProjectAccess, (req, res) => {
   res.json({ status: isOrchestratorConnected(projectId) ? 'running' : 'stopped' });
 });
 
+// ─── Shared Repository Clone ──────────────────────────────────────────────────
+
+projectsRouter.post('/:id/clone_repo', requireProjectAccess, (req, res) => {
+  if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const projectId = parseInt(req.params.id);
+  try {
+    initDb();
+    const project = getProject(projectId);
+    if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
+
+    const body = (req.body || {}) as Partial<RepoCloneSettings>;
+
+    const repoUrl = body.repoUrl ?? body.repo_url ?? project.repo_url;
+    const repoPat = body.repoPat ?? body.repo_pat ?? project.repo_pat ?? '';
+    const repoHost = body.repoHost ?? body.repo_host ?? project.repo_host ?? 'github';
+    const stagingBranch = body.stagingBranch ?? body.staging_branch ?? project.staging_branch ?? 'staging';
+
+    if (!repoUrl) {
+      res.status(400).json({ error: 'Repository URL is not configured for this project' });
+      return;
+    }
+
+    const settings: RepoCloneSettings = {
+      repoUrl,
+      repoPat: repoPat || null,
+      repoHost,
+      stagingBranch,
+    };
+
+    const jobId = startOrAttachCloneJob(projectId, settings);
+    res.json({ jobId, projectId });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+projectsRouter.get('/:id/clone_repo/status', requireProjectAccess, (req, res) => {
+  if (!req.user) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const projectId = parseInt(req.params.id);
+  try {
+    initDb();
+    const project = getProject(projectId);
+    if (!project) { res.status(404).json({ error: 'Project not found' }); return; }
+
+    const status = getCloneJobStatus(projectId);
+    const cloned = isProjectRepoCloned(projectId);
+    if (!status) {
+      res.json({ running: false, stage: 'done', message: null, startedAt: null, completedAt: null, error: null, cloned });
+      return;
+    }
+    res.json({
+      running: status.running,
+      stage: status.stage,
+      message: status.message ?? null,
+      startedAt: status.startedAt,
+      completedAt: status.completedAt,
+      error: status.error,
+      branch: status.branch ?? null,
+      jobId: status.jobId,
+      cloned,
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // ─── Orchestrator Control ─────────────────────────────────────────────────────
 
 projectsRouter.post('/:id/start', requireProjectAccess, async (req, res) => {
@@ -370,25 +481,30 @@ projectsRouter.post('/:id/start', requireProjectAccess, async (req, res) => {
       return;
     }
 
-    const allModels = getAllModels();
-    const modelExists = allModels.some(m => `${m.provider}/${m.model_name}` === models.default_model);
-    if (!modelExists) {
-      res.status(400).json({ error: `Default model "${models.default_model}" is not in the models table. Please refresh models or select a valid default model in the Models tab of project settings.` });
-      return;
-    }
+    // Note: previously this route hard-failed with HTTP 400 when the project's
+    // configured models were not present in the local models table (e.g. a
+    // model that the local kilo provider doesn't currently expose). That made
+    // the orchestrator impossible to start, which is hostile to development
+    // and to environments that fetch models lazily. We now log a warning and
+    // proceed — if a job later tries to dispatch to a missing model, the
+    // underlying provider call will fail with a much more actionable error.
 
-    const allResolvedModels = [
-      { field: 'blueprint_model', value: models.blueprint_model },
-      { field: 'execution_model', value: models.execution_model },
-      { field: 'review_model', value: models.review_model },
-      { field: 'documentation_model', value: models.documentation_model },
-    ];
-    for (const { field, value } of allResolvedModels) {
-      if (value === models.default_model) continue;
-      const exists = allModels.some(m => `${m.provider}/${m.model_name}` === value);
-      if (!exists) {
-        res.status(400).json({ error: `Model "${value}" (${field}) is not in the models table. Please refresh models or select a valid model in the Models tab of project settings.` });
-        return;
+    const allModels = getAllModels();
+    if (allModels.length > 0) {
+      const defaultMissing = !allModels.some(m => `${m.provider}/${m.model_name}` === models.default_model);
+      if (defaultMissing) {
+        console.warn(`[projects] Default model "${models.default_model}" is not in the local models table — starting orchestrator anyway.`);
+      }
+      for (const { field, value } of [
+        { field: 'blueprint_model', value: models.blueprint_model },
+        { field: 'execution_model', value: models.execution_model },
+        { field: 'review_model', value: models.review_model },
+        { field: 'documentation_model', value: models.documentation_model },
+      ]) {
+        if (value === models.default_model) continue;
+        if (!allModels.some(m => `${m.provider}/${m.model_name}` === value)) {
+          console.warn(`[projects] Model "${value}" (${field}) is not in the local models table — starting orchestrator anyway.`);
+        }
       }
     }
 
@@ -595,19 +711,66 @@ projectsRouter.post('/:id/create-jobs-from-stories', requireProjectAccess, (req,
       res.status(400).json({ error: 'No planned jobs found for chatId', chatId });
       return;
     }
-    const jobIds: number[] = [];
-
-    let prevJobId: number | null = null;
-    for (const planJob of planJobs) {
-      const job = insertLocalJob(parseInt(id), {
-        title: planJob.title,
-        description: planJob.content || planJob.description || '',
-        dependsOn: prevJobId ? [String(prevJobId)] : []
+    if (planJobs[0].title.startsWith('Test: ')) {
+      res.status(400).json({
+        error: 'First plan job must be an implementation (jobs may not start with a test).',
+        chatId,
       });
-      jobIds.push(job.id);
-      prevJobId = job.id;
+      return;
     }
 
+    const projectIdNum = parseInt(id);
+    const materialized: Array<{ id: number; type: 'implementation' | 'test' }> = [];
+
+    for (const planJob of planJobs) {
+      const isTest =
+        planJob.title.startsWith('Test: ') ||
+        (typeof planJob.test_plan_markdown === 'string' &&
+          planJob.test_plan_markdown.trim().length > 0);
+      const description = isTest
+        ? (planJob.test_plan_markdown || '')
+        : (planJob.content || planJob.description || '');
+      const job = insertLocalJob(projectIdNum, {
+        title: planJob.title,
+        description,
+        dependsOn: [],
+        type: isTest ? 'test' : 'implementation',
+        test_plan_markdown: isTest ? (planJob.test_plan_markdown || '') : '',
+      });
+      materialized.push({ id: job.id, type: isTest ? 'test' : 'implementation' });
+    }
+
+    let currentImplId: number | null = null;
+    let lastJobId: number | null = null;
+    for (let i = 0; i < materialized.length; i++) {
+      const row = materialized[i];
+      if (row.type === 'implementation') {
+        let newDependsOn: string | null;
+        if (i === 0) {
+          newDependsOn = null;
+        } else if (lastJobId !== null) {
+          newDependsOn = JSON.stringify([String(lastJobId)]);
+        } else {
+          console.warn(`[projects] plan-push: implementation job ${row.id} at position ${i} has no preceding job; starting the chain.`);
+          newDependsOn = null;
+        }
+        updateJob(row.id, { depends_on: newDependsOn });
+        currentImplId = row.id;
+        lastJobId = row.id;
+      } else {
+        if (currentImplId === null) {
+          console.warn(`[projects] plan-push: skipping orphan test job ${row.id} (no preceding implementation in this plan).`);
+          continue;
+        }
+        updateJob(row.id, {
+          depends_on: JSON.stringify([String(currentImplId)]),
+          implements_job_id: currentImplId,
+        });
+        lastJobId = row.id;
+      }
+    }
+
+    const jobIds = materialized.map((m) => m.id);
     res.json({ success: true, jobsCreated: jobIds.length, jobIds });
   } catch (err) {
     console.error('create-jobs error:', err);
@@ -649,6 +812,7 @@ projectsRouter.patch('/:id/jobs/:jobId', requireProjectAccess, (req, res) => {
       title: body.title,
       description: body.description,
       depends_on: body.dependsOn ? JSON.stringify(body.dependsOn) : null,
+      type: body.type === 'test' ? 'test' : 'implementation',
     });
     if (!job) return res.status(404).json({ error: 'Job not found' });
     res.json(job);
@@ -701,6 +865,24 @@ projectsRouter.post('/:id/jobs/:jobId/reset', requireProjectAccess, (req, res) =
       type: 'job_update',
       jobId: parseInt(jobId),
       status: 'PENDING',
+      timestamp: new Date().toISOString(),
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+projectsRouter.post('/:id/jobs/:jobId/reset-plan', requireProjectAccess, (req, res) => {
+  const { id, jobId } = req.params;
+  try {
+    initDb();
+    updateJob(parseInt(jobId), { passed_tests: null });
+    wsManager.broadcast(WsKeys.projectKey(parseInt(id)), {
+      type: 'job_update',
+      jobId: parseInt(jobId),
+      status: 'PENDING',
+      passed_tests: null,
       timestamp: new Date().toISOString(),
     });
     res.json({ success: true });

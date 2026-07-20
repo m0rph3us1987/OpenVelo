@@ -15,11 +15,11 @@ Before designing any new changes, check if the requested Job is already fully im
 
 1. **Analyze the Job & Goal**:
    - First, read the Job Description and requirements provided at the bottom of this message. Identify the target files, components, and layers (e.g. database schema, API routes, UI screens) that need to be created or modified.
-2. **Consult Architecture Docs (As-Needed)**:
-   - Check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists using your file reading tool.
-   - If it does, read it. Based on the components identified in Step 1, ONLY open and read the linked domain architecture markdown files that are directly relevant to your task. Do NOT read unrelated architecture documents.
+2. **Consult System & User Docs (As-Needed)**:
+   - Check if `{{REPO_PATH}}/.openvelo/docs/index.md` exists using your file reading tool.
+   - If it does, read it. Based on the components identified in Step 1, ONLY open and read the linked domain OKF documentation files (architecture or user guides) that are directly relevant to your task. Do NOT read unrelated documents.
 3. **Consult Skills Directory (As-Needed)**:
-   - Read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
+   - Read the absolute path "{{SKILLS_PATH}}/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
    - Evaluate which skill categories are relevant to the tech stack and layers being modified.
    - Only open the linked `_INDEX.md` and read specific `SKILL.md` files for those relevant skills. Do NOT load skills unrelated to the current task.
 4. **Explore & Find (Trace Flow)**:
@@ -83,3 +83,8 @@ Write the markdown plan exactly and only to the path `{{PLAN_PATH}}`. Under no c
 ---
 ## IMPORTANT RULE CONCERNING TESTS
 Write minimal, highly-focused tests. Do not plan extensive mock environments, large test suites, or test complex edge cases that require heavy infrastructure setup. Plan to target only the core success path and key error conditions directly relevant to the new feature. Keep test dependencies low so they compile and execute instantly. Tests MUST live in a dedicated folder (never inside the source code folders). Tests MUST be runnable with a single command from the root (e.g. `npm test` should execute all tests for all components). Tests MUST work inside the container (or via `setup.sh`) and NEVER require a UI. Frontend tests focus on logic, not visuals. Do NOT generate, instruct, or write tests that require visual confirmation. All tests MUST be automated and verifiable via the CLI without human interaction.
+
+---
+## IMPORTANT RULE CONCERNING PERSISTENT PROJECT DATA ({{DATA_PATH}})
+A persistent named volume shared across jobs/containers for this project is mounted at `{{DATA_PATH}}`.
+If your implementation or tests need to store mock data, seed files, databases, or configuration info that successor jobs should access, write/read it to/from `{{DATA_PATH}}`. Always ensure the code/tests check if the data exists in `{{DATA_PATH}}` and dynamically generate it on-the-fly if it is missing. Do not hardcode paths to other transient directories for persistent/shared assets.

@@ -1,7 +1,6 @@
 import * as React from 'react';
 import AnsiToHtml from 'ansi-to-html';
 import { cn } from '@/lib/utils';
-import type { WsLogMessage } from '@/lib/types';
 
 const ansiConverter = new AnsiToHtml({ fg: '#d4d4d4', bg: 'transparent', newline: false, escapeXML: true });
 

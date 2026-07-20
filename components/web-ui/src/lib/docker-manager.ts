@@ -36,25 +36,48 @@ function createDockerClient(): Docker {
 // docker.exe uses native Windows APIs and handles the pipe correctly.
 const useDockerCli = process.platform === 'win32' && process.env.OPENVELO_CONTAINER_MODE === 'true';
 
-// When running inside a container, resolve the network we are on
-// so child containers can be attached to the same network for direct communication.
+// When running inside a container, attach spawned children to the
+// shared `openvelo` network so they can reach the web-ui and the
+// tester by container name without going through the host.
+//
+// Preferred order:
+//   1. An existing `openvelo` network (created by docker compose).
+//   2. The first network we are currently attached to (legacy behavior
+//      when the web-ui itself is on a non-`openvelo` network).
+//   3. None — the spawn falls back to the docker default bridge.
+const OPENVELO_NETWORK = 'openvelo';
 let _resolvedNetworkMode: string | null = null;
 async function resolveNetworkMode(docker: Docker): Promise<string | null> {
   if (_resolvedNetworkMode !== null) return _resolvedNetworkMode;
   if (process.env.OPENVELO_CONTAINER_MODE !== 'true') return null;
 
+  // 1. Explicit `openvelo` network — the canonical answer.
+  try {
+    const net = docker.getNetwork(OPENVELO_NETWORK);
+    const info = await net.inspect();
+    if (info && info.Name === OPENVELO_NETWORK) {
+      _resolvedNetworkMode = OPENVELO_NETWORK;
+      console.log(`[docker-manager] Using shared network: ${OPENVELO_NETWORK}`);
+      return _resolvedNetworkMode;
+    }
+  } catch {
+    // Network doesn't exist yet — fall through to legacy behavior.
+  }
+
+  // 2. Legacy: reuse whatever network we're currently on.
   try {
     const hostname = process.env.HOSTNAME;
-    if (!hostname) return null;
-    const container = docker.getContainer(hostname);
-    const info = await container.inspect();
-    const networks = info.NetworkSettings.Networks;
-    if (networks) {
-      const keys = Object.keys(networks);
-      if (keys.length > 0) {
-        _resolvedNetworkMode = keys[0];
-        console.log(`[docker-manager] Resolved container network: ${_resolvedNetworkMode}`);
-        return _resolvedNetworkMode;
+    if (hostname) {
+      const container = docker.getContainer(hostname);
+      const info = await container.inspect();
+      const networks = info.NetworkSettings?.Networks;
+      if (networks) {
+        const keys = Object.keys(networks);
+        if (keys.length > 0) {
+          _resolvedNetworkMode = keys[0];
+          console.log(`[docker-manager] No '${OPENVELO_NETWORK}' network found; falling back to current container network: ${_resolvedNetworkMode}`);
+          return _resolvedNetworkMode;
+        }
       }
     }
   } catch (err) {
@@ -65,6 +88,14 @@ async function resolveNetworkMode(docker: Docker): Promise<string | null> {
 
 function resolveCliNetworkMode(): string | null {
   if (process.env.OPENVELO_CONTAINER_MODE !== 'true') return null;
+  // Prefer the explicit `openvelo` network.
+  try {
+    const ls = execSync('docker network ls --format={{.Name}}', { encoding: 'utf-8', timeout: 10000 });
+    if (ls.split(/\r?\n/).includes(OPENVELO_NETWORK)) {
+      console.log(`[docker-manager] Using shared network: ${OPENVELO_NETWORK}`);
+      return OPENVELO_NETWORK;
+    }
+  } catch { /* ignore */ }
   try {
     const hostname = (process.env.COMPUTERNAME || execSync('hostname', { encoding: 'utf-8' }).trim()).toLowerCase();
     const inspectJson = execSync(`docker inspect ${hostname}`, { encoding: 'utf-8', timeout: 10000 });
@@ -182,6 +213,18 @@ export const dockerManager = {
         ExtraHosts: process.platform !== 'win32' ? ['host.docker.internal:host-gateway'] : [],
       },
     };
+
+    // Required so the orchestrator (and any agent it spawns) can run
+    // `gbfs mount` (libfuse3 / FUSE). Mirrors docker-compose.yml: /dev/fuse
+    // device + SYS_ADMIN cap + apparmor:unconfined (Docker Desktop default
+    // profile otherwise denies FUSE ioctls).
+    if (containerConfig.HostConfig && process.platform !== 'win32') {
+      containerConfig.HostConfig.Devices = [
+        { PathOnHost: '/dev/fuse', PathInContainer: '/dev/fuse', CgroupPermissions: 'rwm' },
+      ];
+      containerConfig.HostConfig.CapAdd = ['SYS_ADMIN'];
+      containerConfig.HostConfig.SecurityOpt = ['apparmor:unconfined'];
+    }
 
     if (networkMode && containerConfig.HostConfig) {
       containerConfig.HostConfig.NetworkMode = networkMode;

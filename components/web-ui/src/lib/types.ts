@@ -7,6 +7,7 @@ export interface Project {
   repo_url: string;
   repo_pat: string | null;
   docker_image: string;
+  docker_image_tester: string;
   backend: string;
   default_model: string;
   execution_model: string;
@@ -39,8 +40,10 @@ export interface Job {
   title: string;
   description: string | null;
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'STOPPED';
+  type: 'implementation' | 'test';
   feature_id: number | null;
   container_id: string | null;
+  vnc_host_port: number | null;
   branch: string | null;
   retry_count: number;
   stage: string | null;
@@ -50,6 +53,11 @@ export interface Job {
   runtime: number;
   created_at: string;
   updated_at: string;
+  test_plan_markdown: string;
+  implements_job_id: number | null;
+  verdict?: string | null;
+  summary?: string | null;
+  passed_tests?: string | null;
 }
 
 export interface WsLogMessage {
@@ -70,6 +78,8 @@ export interface WsJobUpdateMessage {
   attempt?: number;
   maxAttempts?: number;
   retryCount?: number;
+  vncHostPort?: number;
+  passed_tests?: string | null;
   timestamp: string;
 }
 
@@ -131,12 +141,29 @@ interface WsConnectedMessage {
   timestamp: string;
 }
 
+export interface WsRepoCloneUpdateMessage {
+  type: 'repo_clone_update';
+  jobId: string;
+  stage: 'cloning' | 'pulling' | 'checkout' | 'starting' | 'done';
+  message?: string;
+}
+
+export interface WsRepoCloneCompleteMessage {
+  type: 'repo_clone_complete';
+  jobId: string;
+  status: 'success' | 'error';
+  error?: string;
+  branch?: string;
+}
+
 export type WsMessage =
   | WsLogMessage
   | WsJobUpdateMessage
   | WsJobUsageUpdateMessage
   | WsJobPlanUpdateMessage
-  | WsConnectedMessage;
+  | WsConnectedMessage
+  | WsRepoCloneUpdateMessage
+  | WsRepoCloneCompleteMessage;
 
 export interface ProjectModels {
   default_model: string;
@@ -158,6 +185,7 @@ export interface ProjectFormData {
   repo_url: string;
   repo_pat: string;
   docker_image: string;
+  docker_image_tester: string;
   backend: string;
   default_model: string;
   execution_model: string;
@@ -251,6 +279,7 @@ export interface ChatSession {
   sub_stage_pre_error: string;
   error_type?: string | null;
   running?: number;
+  status?: string | null;
   created_at: string;
   updated_at: string;
 }

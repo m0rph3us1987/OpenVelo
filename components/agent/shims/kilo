@@ -1,0 +1,20 @@
+#!/bin/bash
+args=()
+for arg in "$@"; do
+    if [[ "$arg" =~ ^/ ]]; then
+        win_path=$(winepath -w "$arg" 2>/dev/null || echo "Z:${arg//\//\\}")
+        args+=("$win_path")
+    else
+        args+=("$arg")
+    fi
+done
+escaped_args=$(printf "%q " "${args[@]}")
+# Generic `kilo` wrapper for direct/interactive invocations. Wine needs a TTY
+# for the Windows Node (plain pipes trigger EBADF console errors), so run it
+# under script(1). NOTE: `kilo acp` is NOT driven through this shim — the
+# wrapper spawns it via the Win32-pipe bridge (wine-acp-bridge.cjs) because
+# kilo.exe cannot read a Unix pipe/socket stdin under Wine and starts its
+# interactive TUI on a TTY. This shim is only for other/interactive `kilo` uses.
+exec script -q -e -c "exec wine Z:\\\\opt\\\\node-win\\\\node.exe Z:\\\\opt\\\\node-win\\\\node_modules\\\\@kilocode\\\\cli\\\\bin\\\\kilo $escaped_args" /dev/null
+
+

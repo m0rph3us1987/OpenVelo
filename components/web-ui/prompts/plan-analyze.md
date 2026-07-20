@@ -5,7 +5,7 @@ REPOSITORY PATH: {REPO_DIR}
 
 SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
 First, analyze the repository layout and files.
-- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the components you find in the repository, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. Based on the components you find in the repository, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
 - Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack found in the repository, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 The implementing agent will follow these skills and architectural rules — your output must be compatible.
 
@@ -35,7 +35,7 @@ Read these files FIRST if they exist — they are the highest-value sources:
 - `README.md` (or `README.txt`, `README.rst`, `README`)
 - `CONTRIBUTING.md`, `DEVELOPMENT.md`, `HACKING.md`
 - `CLAUDE.md`, `COPILOT.md`, `AGENTS.md`, `.github/copilot-instructions.md`
-- `docs/architecture/`, `docs/adr/`, or any architecture decision records
+- `docs/`, `docs/adr/`, or any architecture decision records
 - `.cursorrules`, `.windsurfrules`
 
 ### Step 2: Identify the project

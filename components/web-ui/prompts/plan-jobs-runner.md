@@ -15,7 +15,7 @@ Read the SPECIFICATION CONTEXT above. This is the authoritative specification co
 
 SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
 First, analyze the job title ({JOB_TITLE}), description, and the requirement section/topics mapped by {JOB_LINE_MAPPING} in the SPECIFICATION CONTEXT above to understand the scope of this job.
-- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the files/modules this job will modify, ONLY open and read the linked domain architecture files that are relevant to your task. Do NOT load unrelated architecture docs.
+- Check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. Based on the files/modules this job will modify, ONLY open and read the linked domain architecture files that are relevant to your task. Do NOT load unrelated architecture docs.
 - Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack being planned for this job, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 The implementing agent will follow these skills and architectural rules — your job specification must be compatible.
 

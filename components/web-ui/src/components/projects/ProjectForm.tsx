@@ -26,6 +26,7 @@ export const DEFAULTS: ProjectFormData = {
   repo_url: '',
   repo_pat: '',
   docker_image: 'openvelo-agent:linux',
+  docker_image_tester: 'openvelo-tester:linux',
   backend: 'opencode',
   default_model: '',
   execution_model: '',
@@ -59,6 +60,7 @@ export function toFormData(project: Project): ProjectFormData {
     repo_url: project.repo_url,
     repo_pat: project.repo_pat || '',
     docker_image: project.docker_image,
+    docker_image_tester: project.docker_image_tester,
     backend: project.backend,
     default_model: project.default_model ?? '',
     execution_model: project.execution_model ?? '',
@@ -308,8 +310,10 @@ export function ProjectForm({ initial, suggestedPort, onSubmit, onCancel, isSubm
 
                 <TabsContent value="execution" className="mt-0 space-y-4">
                   <div className="space-y-4">
-                    <Field label="Docker Image" id="docker_image" value={form.docker_image} onChange={set('docker_image')}
+                    <Field label="Docker Image Implementer" id="docker_image" value={form.docker_image} onChange={set('docker_image')}
                       placeholder="openvelo-agent:linux" />
+                    <Field label="Docker Image Tester" id="docker_image_tester" value={form.docker_image_tester} onChange={set('docker_image_tester')}
+                      placeholder="openvelo-tester:linux" />
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <Field label="Build CMD" id="build_cmd" value={form.build_cmd} onChange={set('build_cmd')}
                         placeholder="make build" />

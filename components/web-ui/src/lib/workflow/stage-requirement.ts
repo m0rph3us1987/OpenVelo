@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
-import { getChatSession, getProject, getChatDir, getChatMessages, getProjectModels, getRequirementOutlines, insertRequirementOutline, insertRequirementSection, getRequirementSections, deleteRequirementOutlinesByChatId, deleteRequirementSectionsByChatId, updateRequirementOutlineStatus, updateRequirementOutlineLogs } from '@/lib/db';
+import { getChatSession, getProject, getChatDir, getChatMessages, getProjectModels, getRequirementOutlines, insertRequirementOutline, insertRequirementSection, deleteRequirementOutlinesByChatId, deleteRequirementSectionsByChatId, updateRequirementOutlineStatus, updateRequirementOutlineLogs } from '@/lib/db';
 import { getSkillsDir } from '@/lib/skills';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
-import { transitionTo } from './index';
+import { WorkflowAbortError } from '@/lib/opencode-serve-client';
+import { transitionTo, getWorkflowSignal } from './index';
 import { stageWsManager } from '@/lib/stage-ws-manager';
 import { loggerService } from '@/lib/logger-service';
 import { execSync } from 'child_process';
@@ -20,7 +21,7 @@ interface OutlineResult {
 }
 
 async function parseJsonWithRetry(
-  client: { sendMessage: (sessionId: string, prompt: string, model: string) => Promise<{ parts: Array<{ type: string; text?: string }> }> },
+  client: { sendMessage: (sessionId: string, prompt: string, model: string, skipMainLog?: boolean, signal?: AbortSignal) => Promise<{ parts: Array<{ type: string; text?: string }> }> },
   sessionId: string,
   resultText: string,
   expectedKey: string,
@@ -28,7 +29,8 @@ async function parseJsonWithRetry(
   models: { analyzer_model: string; planning_model: string; requirement_model: string; chat_model: string },
   chatDir: string,
   chatId: number,
-  maxAttempts: number = 3
+  maxAttempts: number = 3,
+  signal?: AbortSignal
 ): Promise<{ parsed: OutlineResult | null; finalText: string }> {
   const extractJson = (text: string): OutlineResult | null => {
     const stripped = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -67,17 +69,21 @@ async function parseJsonWithRetry(
   const correctionModel = models[modelKey];
 
   for (let attempt = 1; attempt < maxAttempts; attempt++) {
+    if (signal?.aborted) {
+      throw new WorkflowAbortError('Aborted during JSON parse retry');
+    }
     loggerService.appendVerbose(chatId, 'workflow:requirement', `JSON parse failed, attempt ${attempt}/${maxAttempts}, requesting correction`);
     const correctionPrompt = `The JSON you returned was malformed or incomplete. Return ONLY valid JSON with no additional text. Previous response was:\n${resultText.substring(0, 2000)}\n\nReturn only the corrected JSON.`;
 
     try {
-      const corrected = await client.sendMessage(sessionId, correctionPrompt, correctionModel);
+      const corrected = await client.sendMessage(sessionId, correctionPrompt, correctionModel, false, signal);
       const correctedText = corrected.parts.find((p: { type?: string }) => p.type === 'text')?.text?.trim() ?? '';
       const correctedParsed = extractJson(correctedText);
       if (correctedParsed && validateWithNode(JSON.stringify(correctedParsed))) {
         return { parsed: correctedParsed, finalText: correctedText };
       }
     } catch (err) {
+      if (err instanceof WorkflowAbortError) throw err;
       loggerService.appendVerbose(chatId, 'workflow:requirement', `Correction request failed: ${err}`);
     }
   }
@@ -90,6 +96,12 @@ export async function handleRequirement(chatId: number): Promise<void> {
   const chat = getChatSession(chatId);
   if (!chat) {
     loggerService.appendVerbose(chatId, 'workflow:requirement', `Chat ${chatId} not found`);
+    return;
+  }
+
+  const signal = getWorkflowSignal(chatId);
+  if (signal?.aborted) {
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `Requirement aborted before start`);
     return;
   }
 
@@ -144,6 +156,12 @@ export async function handleRequirement(chatId: number): Promise<void> {
 async function handleOutline(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
   loggerService.appendVerbose(chatId, 'workflow:requirement', `Generating outline`);
 
+  const signal = getWorkflowSignal(chatId);
+  if (signal?.aborted) {
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `Outline aborted before start`);
+    return;
+  }
+
   deleteRequirementSectionsByChatId(chatId);
   deleteRequirementOutlinesByChatId(chatId);
 
@@ -190,7 +208,7 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
   loggerService.appendVerbose(chatId, 'workflow:requirement', 'Sending outline prompt');
 
   try {
-    const result = await client.sendMessage(sessionId, prompt, models.requirement_model);
+    const result = await client.sendMessage(sessionId, prompt, models.requirement_model, false, signal);
 
     const textPart = result.parts.find((p: { type?: string }) => p.type === 'text');
     const resultText = textPart?.text?.trim() ?? '';
@@ -203,7 +221,9 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
       'requirement_model',
       models,
       chatDir,
-      chatId
+      chatId,
+      3,
+      signal
     );
 
     if (!parsed) {
@@ -231,6 +251,10 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
     transitionTo(chatId, 'requirement', 'sections');
     stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'sections' });
   } catch (err) {
+    if (err instanceof WorkflowAbortError || signal?.aborted) {
+      loggerService.appendVerbose(chatId, 'workflow:requirement', `Outline aborted`);
+      return;
+    }
     loggerService.appendVerbose(chatId, 'workflow:requirement', `sendMessage failed: ${err}`);
     const currentChat = getChatSession(chatId);
     if (currentChat && !currentChat.running) {
@@ -240,9 +264,12 @@ async function handleOutline(chatId: number, chatDir: string, repoDir: string, p
   }
 }
 
-async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promise<void>): Promise<void> {
+async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promise<void>, shouldStop?: () => boolean): Promise<void> {
   const executing = new Set<Promise<void>>();
   for (const item of items) {
+    if (shouldStop?.()) {
+      break;
+    }
     const p = Promise.resolve().then(() => fn(item));
     executing.add(p);
     const clean = () => executing.delete(p);
@@ -256,6 +283,12 @@ async function runWithLimit<T>(limit: number, items: T[], fn: (item: T) => Promi
 
 async function handleSections(chatId: number, chatDir: string, repoDir: string, projectId: number): Promise<void> {
   loggerService.appendVerbose(chatId, 'workflow:requirement', `Stage 2: Requirement Section Generation`);
+
+  const signal = getWorkflowSignal(chatId);
+  if (signal?.aborted) {
+    loggerService.appendVerbose(chatId, 'workflow:requirement', `Sections aborted before start`);
+    return;
+  }
 
   deleteRequirementSectionsByChatId(chatId);
 
@@ -317,7 +350,7 @@ async function handleSections(chatId: number, chatDir: string, repoDir: string, 
     for (const file of files) {
       try {
         fs.unlinkSync(path.join(sectionsDir, file));
-      } catch (err) {
+      } catch {
         // ignore
       }
     }
@@ -326,6 +359,10 @@ async function handleSections(chatId: number, chatDir: string, repoDir: string, 
   try {
     // Run outlines concurrently up to a limit of 4
     await runWithLimit(4, outlines, async (outline) => {
+      if (signal?.aborted) {
+        updateRequirementOutlineStatus(outline.id, 'failed');
+        return;
+      }
       updateRequirementOutlineStatus(outline.id, 'running');
       stageWsManager.broadcastToStage(chatId, 'requirement', {
         type: 'sub_stage',
@@ -361,8 +398,8 @@ async function handleSections(chatId: number, chatDir: string, repoDir: string, 
       }, 1000);
 
       try {
-        await client.sendMessage(sessionId, sectionPrompt, models.requirement_model, true);
-        
+        await client.sendMessage(sessionId, sectionPrompt, models.requirement_model, true, signal);
+
         clearInterval(interval);
         const finalLogs = await client.reconstructSessionLogs(sessionId);
         updateRequirementOutlineLogs(outline.id, finalLogs);
@@ -430,6 +467,10 @@ async function handleSections(chatId: number, chatDir: string, repoDir: string, 
     transitionTo(chatId, 'requirement', 'requirement');
     stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'requirement', progress: `Requirement` });
   } catch (err) {
+    if (err instanceof WorkflowAbortError || signal?.aborted) {
+      loggerService.appendVerbose(chatId, 'workflow:requirement', `Sections aborted`);
+      return;
+    }
     loggerService.appendVerbose(chatId, 'workflow:requirement', `Requirement sections orchestration failed: ${err}`);
     const currentChat = getChatSession(chatId);
     if (currentChat && !currentChat.running) {
@@ -478,7 +519,8 @@ function combineSectionMarkdowns(sections: Array<{ index: number; title: string;
   return parts.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n';
 }
 
-async function handleGenerate(chatId: number, chatDir: string): Promise<void> {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function handleGenerate(chatId: number, _chatDir: string): Promise<void> {
   loggerService.appendVerbose(chatId, 'workflow:requirement', `Legacy handleGenerate called, transitioning to requirement`);
   transitionTo(chatId, 'requirement', 'requirement');
   stageWsManager.broadcastToStage(chatId, 'requirement', { type: 'sub_stage', sub_stage: 'requirement', progress: `Requirement` });

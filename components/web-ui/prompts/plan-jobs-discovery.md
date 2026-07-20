@@ -17,7 +17,7 @@ Read the SPECIFICATION CONTEXT above. This is the authoritative specification co
 
 SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
 Before analyzing skills or architecture, read the SPECIFICATION CONTEXT above to understand the system features to plan.
-- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the scope of features described in the SPECIFICATION CONTEXT, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. Based on the scope of features described in the SPECIFICATION CONTEXT, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
 - Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack being planned, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 The implementing agent will follow these skills and architectural rules — your job breakdown must be compatible.
 
@@ -51,6 +51,22 @@ Decompose the project into sequential, independent, user-facing views, screens, 
 ### 2. Sequential Dependencies (Strict Sequence)
 All jobs must execute strictly **sequentially** (one after the other, in a single-threaded queue). Ensure the overall `index` is a flat, strictly ordered sequence from 1 to N.
 
+### 3. Implementation Jobs ONLY (No Test Jobs)
+Do NOT generate any test jobs, test descriptions, or test plans in this prompt. Generate ONLY implementation jobs representing sequential, independently deliverable functional phases of the system.
+
+### 4. Sequential Dependencies (Strict Sequence)
+All jobs must execute strictly sequentially (one after the other, in a single-threaded queue). Ensure the overall `index` is a flat, strictly ordered sequence from 1 to N.
+
+### 5. Per-Job Payload — Naming and Description Conventions
+For each emitted job entry:
+- `title`: A concise user-facing title.
+- `description`: A one-sentence summary of what this job delivers.
+- `index`: Sequential integers starting at 1, assigned in array order, with no gaps.
+- `test_plan_markdown`: Always set to the empty string `""` (or omit it).
+
+### 6. Ordering Rule
+The flat `jobs` array index is the execution order. All implementation jobs are ordered sequentially: `[ impl_1, impl_2, impl_3, ... ]`.
+
 ### GREENFIELD PROJECTS & PROJECT SCAFFOLDING (CRITICAL)
 If the repository context indicates that this is a greenfield project (e.g. empty repository or brand new/minimal directory structure), the very first job (Index 1) MUST be about project scaffolding, monorepo bootstrapping, and setting up the project structure.
 
@@ -63,10 +79,9 @@ Describe each job from the perspective of a user explaining what they want to a 
 - **SPECIFIC TECHNICAL BOUNDARIES**: You MUST include explicit database schemas, tables, fields, API endpoints, REST route structures, library interfaces/inputs/outputs, or communication protocols if they were discussed or are necessary to define job boundaries. Make sure these boundaries are precise so sequential agents can implement them without interface drift.
 
 ### ABSOLUTE TESTING, QA, & DOCUMENTATION PROHIBITION (CRITICAL)
-You MUST NOT generate any dedicated "Testing" job, "QA" job, "Documentation" job, or any job whose purpose is testing, verification, test automation, test suite setup, or documentation.
+You MUST NOT generate any "Testing" job, "QA" job, "Documentation" job, or any job whose sole purpose is testing, verification, test automation, test suite setup, or documentation.
 - Testing and documentation are handled autonomously by the workflow execution pipeline. Do not plan any jobs for them.
-- Specifically, do NOT create any jobs for "writing tests", "creating tests", "generating test suites", "QA", or "updating documentation" (including files in `.openvelo/architecture/` or `ARCHITECTURE.md`).
-- **CRITICAL**: Even if the conversation history explicitly mentions writing tests or updating documentation, you **MUST completely ignore them** when planning jobs. Do NOT generate jobs for them.
+- Specifically, do NOT create any jobs for "writing tests", "creating tests", "generating test suites", "QA", or "updating documentation" (including files in `docs/` or `ARCHITECTURE.md`).
 
 ---
 
@@ -76,14 +91,22 @@ Your response text must contain ONLY a single JSON object. No preamble, no posta
 
 ```json
 {
-  "build_cmd": "the exact shell command to build the project (e.g. npm run build, go build ./...)",
-  "test_cmd": "the exact shell command to run tests (e.g. npm test, go test ./...)",
+  "build_cmd": "npm run build",
+  "test_cmd": "npm test",
   "jobs": [
     {
       "index": 1,
-      "title": "concise job title (e.g., Unit Management)",
-      "description": "one-sentence summary of what this job delivers",
-      "line_mapping": "Lines X-Y, Z-W"
+      "title": "User Login",
+      "description": "Users can log in by entering a registered email and password and being redirected to the dashboard.",
+      "line_mapping": "Q&A regarding authentication flow",
+      "test_plan_markdown": ""
+    },
+    {
+      "index": 2,
+      "title": "User Dashboard",
+      "description": "Authenticated users land on a dashboard showing their account summary.",
+      "line_mapping": "Final Assessment regarding dashboard layout",
+      "test_plan_markdown": ""
     }
   ]
 }

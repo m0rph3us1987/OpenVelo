@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { spawn } from 'child_process';
 import { getChatSession, getProject, getChatDir } from '@/lib/db';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
 import { transitionTo } from './index';
@@ -24,25 +23,17 @@ export async function handleInit(chatId: number): Promise<void> {
     return;
   }
 
-  // Step 1: Delete entire chatDir if it exists
-  loggerService.appendVerbose(chatId, 'workflow:init', `Cleaning up chat directory: ${chatDir}`);
-  if (fs.existsSync(chatDir)) {
-    fs.rmSync(chatDir, { recursive: true, force: true });
-  }
-
-  // Step 2: Update sub_stage to 'cloning'
+  transitionTo(chatId, 'init', 'preparing');
+  stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'preparing' });
   transitionTo(chatId, 'init', 'cloning');
   stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'cloning' });
+  transitionTo(chatId, 'init', 'mounting');
+  stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'mounting' });
 
-  // Step 3: Clone repository
-  const repoUrl = project.repo_url;
-  if (!repoUrl) {
+  if (!project.repo_url) {
     loggerService.appendVerbose(chatId, 'workflow:init', `No repo_url for project ${chat.project_id}`);
     return;
   }
-
-  const repoDir = path.join(chatDir, 'repository');
-  fs.mkdirSync(repoDir, { recursive: true });
 
   const uploadsDir = path.join(chatDir, 'uploads');
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -88,14 +79,19 @@ export async function handleInit(chatId: number): Promise<void> {
     "grep": "allow",
     "glob": "allow",
     "todowrite": "allow",
-    "task": "allow",
+    // Deny subagent spawning. The `task` tool launches a nested subagent
+    // session whose work is opaque and produces no visible output for long
+    // stretches — observed to hang phases (a pending `other`-kind tool call
+    // that never completes). Kilo surfaces the deny as a normal tool
+    // rejection, so the LLM falls back to direct tools instead.
+    "task": "deny",
     "ask_user": "allow",
     "question": "deny",
     "*": "allow",
     "external_directory": whitelistedPaths
   };
 
-  const agentConfig: Record<string, { permission: any }> = {};
+  const agentConfig: Record<string, { permission: unknown }> = {};
   const agentsList = ['plan', 'code', 'build', 'general', 'explore', 'ask'];
   for (const name of agentsList) {
     agentConfig[name] = { permission: permissions };
@@ -115,71 +111,9 @@ export async function handleInit(chatId: number): Promise<void> {
     "agent": agentConfig
   }, null, 2));
 
-  loggerService.appendVerbose(chatId, 'workflow:init', `Cloning repository to ${repoDir}`);
-
-  // Use git clone
-  const gitArgs = ['clone'];
-  if (project.repo_pat) {
-    const urlWithCreds = addPatToUrl(repoUrl, project.repo_pat, project.repo_host);
-    gitArgs.push(urlWithCreds, repoDir);
-  } else {
-    gitArgs.push(repoUrl, repoDir);
-  }
-
-  return new Promise((resolve, reject) => {
-    const proc = spawn('git', gitArgs, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    proc.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    proc.on('close', (code) => {
-      if (code !== 0) {
-        loggerService.appendVerbose(chatId, 'workflow:init', `git clone failed: ${stderr}`);
-        reject(new Error(`git clone failed with code ${code}`));
-        return;
-      }
-
-      loggerService.appendVerbose(chatId, 'workflow:init', `Repository cloned successfully`);
-
-      const branch = project.staging_branch || 'staging';
-      loggerService.appendVerbose(chatId, 'workflow:init', `Checking out branch: ${branch}`);
-      const checkoutProc = spawn('git', ['checkout', branch], { cwd: repoDir, stdio: 'ignore' });
-      
-      checkoutProc.on('close', () => {
-        // Step 4: Update sub_stage to 'starting' before spawning opencode server
-        transitionTo(chatId, 'init', 'starting');
-        stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'starting' });
-
-        // Step 5: Spawn opencode server
-        const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
-        client.ensureStarted().then(() => {
-          // Step 6: Update stage to 'analyzing'
-          transitionTo(chatId, 'analyzing', '');
-          resolve();
-        }).catch((err) => {
-          loggerService.appendVerbose(chatId, 'workflow:init', `Failed to spawn opencode server: ${err.message}`);
-          reject(err);
-        });
-      });
-    });
-  });
-}
-
-function addPatToUrl(url: string, pat: string, repoHost: string): string {
-  try {
-    const parsed = new URL(url);
-    if (repoHost === 'bitbucket') {
-      parsed.username = 'x-token-auth';
-    } else {
-      parsed.username = 'token';
-    }
-    parsed.password = pat;
-    return parsed.toString();
-  } catch {
-    return url;
-  }
+  transitionTo(chatId, 'init', 'starting');
+  stageWsManager.broadcastToStage(chatId, 'init', { type: 'sub_stage', sub_stage: 'starting' });
+  const client = serveRegistry.getOrCreate(chatId, chatDir, process.env);
+  await client.ensureStarted();
+  transitionTo(chatId, 'analyzing', '');
 }

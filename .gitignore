@@ -76,6 +76,14 @@ components/orchestrator/temp_data/
 orchestrator.sqlite
 
 # -----------------------------------------------------------------------------
+# Tester
+# verify/ is a local-only smoke-test scratchpad for the tester
+# daemon — never part of the repo. The HTTP API it drove was
+# removed when the tester migrated to the orchestrator WS protocol.
+# -----------------------------------------------------------------------------
+components/tester/verify/
+
+# -----------------------------------------------------------------------------
 # Logs
 # -----------------------------------------------------------------------------
 *.log
@@ -139,3 +147,15 @@ coverage/
 *.seed
 *.pid.lock
 .npm/
+.openvelo/implementer-notes.md
+
+# -----------------------------------------------------------------------------
+# gbfs binary staging
+# Copies of components/gbfs/gbfs are placed in each component's directory
+# before `docker build` so the Dockerfile can `COPY gbfs-binary /gbfs/gbfs`.
+# Regenerate via `npm run gbfs:stage -- <components...>` (run automatically by
+# the docker-image-* npm scripts).
+# -----------------------------------------------------------------------------
+components/web-ui/gbfs-binary
+components/agent/gbfs-binary
+components/tester/gbfs-binary

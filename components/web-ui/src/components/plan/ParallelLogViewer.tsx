@@ -14,20 +14,22 @@ interface Task {
 
 interface ParallelLogViewerProps {
   chatId: number;
-  type: 'requirement' | 'plan';
+  type: 'requirement' | 'plan' | 'test';
 }
 
 export function ParallelLogViewer({ chatId, type }: ParallelLogViewerProps) {
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [selectedTaskId, setSelectedTaskId] = React.useState<number | null>(null);
   const [loading, setLoading] = React.useState(true);
-  
+
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const userScrolledAwayRef = React.useRef(false);
 
-  const fetchUrl = type === 'requirement' 
+  const fetchUrl = type === 'requirement'
     ? `/api/chats/${chatId}/requirement/outlines`
-    : `/api/plan/jobs?chatId=${chatId}`;
+    : type === 'test'
+      ? `/api/plan/${chatId}/test-jobs`
+      : `/api/plan/jobs?chatId=${chatId}`;
 
   const fetchTasks = React.useCallback(async () => {
     try {
@@ -35,7 +37,7 @@ export function ParallelLogViewer({ chatId, type }: ParallelLogViewerProps) {
       if (res.ok) {
         const data = (await res.json()) as Task[];
         // Sort by index
-        const sorted = data.sort((a, b) => {
+        const sorted = [...data].sort((a, b) => {
           const idxA = a.section_index ?? a.job_index ?? 0;
           const idxB = b.section_index ?? b.job_index ?? 0;
           return idxA - idxB;
@@ -124,7 +126,7 @@ export function ParallelLogViewer({ chatId, type }: ParallelLogViewerProps) {
       {/* Left panel: Task list */}
       <div className="border-r border-border overflow-y-auto flex flex-col bg-card">
         <div className="p-4 border-b border-border font-semibold text-sm text-foreground uppercase tracking-wider">
-          Planning Tasks
+          {type === 'test' ? 'Test Tasks' : 'Planning Tasks'}
         </div>
         <div className="flex-1 divide-y divide-border">
           {tasks.map((task) => {

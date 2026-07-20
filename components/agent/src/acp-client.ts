@@ -16,6 +16,8 @@
 // be streamed via the onTextDelta callback.
 
 import { spawn, ChildProcess } from 'child_process';
+import net from 'net';
+import { EventEmitter } from 'events';
 import { AgentStatus } from './agent-status.js';
 import {
     AcpError,
@@ -26,6 +28,9 @@ import {
     type JsonRpcResponse,
     type McpServer,
     type PermissionOption,
+    type PlanEntry,
+    type PlanEntryStatus,
+    type PlanEntryPriority,
     type RequestPermissionOutcome,
     type RequestPermissionParams,
     type SessionConfigOption,
@@ -52,16 +57,43 @@ export interface ACPLogger {
 }
 
 export interface ACPClientOptions {
-    /** Working directory for the spawned `kilo acp` process. */
+    /**
+     * Working directory for the spawned `kilo acp` process. This must be a
+     * real, valid directory on the platform the subprocess is launched on
+     * (a Linux path when kilo runs under Wine, since the shim is a Linux
+     * process).
+     */
     cwd: string;
+    /**
+     * Working directory reported to the kilo engine as the ACP workspace root
+     * (the `session/new` `cwd` param and the `<environment_details>` block).
+     * When kilo runs under Wine this is the Windows form (e.g. `C:\repo`).
+     * Defaults to `cwd` when omitted.
+     */
+    acpCwd?: string;
     /** Path or name of the `kilo` binary. Default: 'kilo' (uses $PATH). */
     kiloBinary?: string;
+    /**
+     * When true, run kilo under Wine behind the `wine-acp-bridge.cjs` helper
+     * and speak ACP over a TCP socket instead of spawning `kilo` directly over
+     * stdio. Required in the Wine image because Wine cannot expose a Unix
+     * pipe/socket as a Windows std handle (kilo would crash with EBADF).
+     * Default: false (native/Linux stdio path).
+     */
+    useWineBridge?: boolean;
     /** Extra env vars for the spawned subprocess. */
     extraEnv?: Record<string, string>;
     /** Override the logger. Defaults to stdout/stderr. */
     logger?: ACPLogger;
     /** Timeout for the `initialize` handshake in ms. Default 60_000. */
     initTimeoutMs?: number;
+    /**
+     * Per-turn inactivity timeout in ms. While a turn is in flight, the timer
+     * is reset on every session/update; if no update arrives for this long the
+     * turn rejects with an error instead of hanging indefinitely. Set to 0 to
+     * disable. Default 0 (disabled — caller should pass an explicit value).
+     */
+    turnInactivityTimeoutMs?: number;
     /**
      * Print every raw JSON-RPC message to stdout. Default: `false`.
      * Used for debugging the wire protocol only. To re-enable, also
@@ -120,6 +152,65 @@ const defaultLogger: ACPLogger = {
 };
 
 // ---------------------------------------------------------------------------
+// Transport abstraction.
+//
+// The JSON-RPC client only needs a duplex byte transport with the shape of a
+// child process's stdio: a writable `stdin`, a readable `stdout`, an optional
+// readable `stderr`, an `exit` event and a `kill()`. A `ChildProcess`
+// satisfies this directly (the native/Linux path). Under Wine we can't hand
+// kilo a Unix pipe/socket stdin (it fails with EBADF), so we run kilo behind
+// the `wine-acp-bridge.cjs` helper and speak to it over a TCP socket — the
+// `WineBridgeTransport` below adapts that socket to the same shape.
+// ---------------------------------------------------------------------------
+
+export interface AcpTransport {
+    stdin: NodeJS.WritableStream | null;
+    stdout: NodeJS.ReadableStream | null;
+    stderr: NodeJS.ReadableStream | null;
+    on(event: 'exit', listener: (code: number | null) => void): unknown;
+    kill(signal?: NodeJS.Signals | number): boolean | void;
+}
+
+// Default Wine paths (overridable via env, set in Dockerfile.wine). These are
+// Windows-form paths because they are consumed by `wine` / the Windows Node.
+const WINE_BINARY = process.env.WINE_BINARY || 'wine';
+const WINE_NODE_EXE = process.env.WINE_NODE_EXE || 'Z:\\opt\\node-win\\node.exe';
+const WINE_ACP_BRIDGE = process.env.WINE_ACP_BRIDGE || 'Z:\\usr\\local\\bin\\wine-acp-bridge.cjs';
+const KILO_WINDOWS_EXE = process.env.KILO_WINDOWS_EXE ||
+    'Z:\\opt\\node-win\\node_modules\\@kilocode\\cli\\node_modules\\@kilocode\\cli-windows-x64\\bin\\kilo.exe';
+const WINE_ACP_BRIDGE_LOG = process.env.WINE_ACP_BRIDGE_LOG || 'C:\\tmp\\wine-acp-bridge.log';
+
+/**
+ * Adapts the TCP socket to the wine-acp-bridge (and the underlying `wine`
+ * child process) to the {@link AcpTransport} shape. The socket is both the
+ * `stdin` and `stdout` (it's a duplex). `kill()` tears down the socket, the
+ * wine child and the listening server.
+ */
+class WineBridgeTransport extends EventEmitter implements AcpTransport {
+    readonly stdin: NodeJS.WritableStream;
+    readonly stdout: NodeJS.ReadableStream;
+    readonly stderr: NodeJS.ReadableStream | null = null;
+
+    constructor(
+        private readonly socket: net.Socket,
+        private readonly child: ChildProcess,
+        private readonly server: net.Server,
+    ) {
+        super();
+        this.stdin = socket;
+        this.stdout = socket;
+        socket.on('close', () => this.emit('exit', child.exitCode));
+        child.on('exit', (code) => this.emit('exit', code));
+    }
+
+    kill(): void {
+        try { this.socket.destroy(); } catch { /* ignore */ }
+        try { this.child.kill('SIGTERM'); } catch { /* ignore */ }
+        try { this.server.close(); } catch { /* ignore */ }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC 2.0 client over the `kilo acp` subprocess stdio.
 //
 // Transport: newline-delimited JSON over stdio. The agent can send us
@@ -142,16 +233,43 @@ export interface JsonRpcClientHandlers {
 }
 
 export class JsonRpcClient {
-    private proc: ChildProcess;
+    private proc: AcpTransport;
     private nextId = 1;
     private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
     private handlers: JsonRpcClientHandlers;
     private stdoutBuf = '';
+    /**
+     * Ring buffer of raw JSON payloads we have written to the subprocess's
+     * stdin (no trailing newline). Defense-in-depth against a transport that
+     * echoes our own outbound writes back onto stdout (e.g. a TTY in non-raw
+     * mode). An echoed line is byte-identical to one we just sent; without this
+     * guard the client would parse its own `initialize` request as an inbound
+     * request and fail with "method not found: initialize". The Wine path now
+     * uses a clean TCP bridge (no echo), so this rarely fires, but it is cheap
+     * and race-proof insurance.
+     */
+    private sentPayloads = new Set<string>();
+    private sentPayloadQueue: string[] = [];
+    private static readonly SENT_PAYLOAD_HISTORY = 64;
 
-    constructor(proc: ChildProcess, handlers: JsonRpcClientHandlers) {
+    constructor(proc: AcpTransport, handlers: JsonRpcClientHandlers) {
         this.proc = proc;
         this.handlers = handlers;
         this.attach();
+    }
+
+    private trackSent(payload: string): void {
+        this.sentPayloads.add(payload);
+        this.sentPayloadQueue.push(payload);
+        while (this.sentPayloadQueue.length > JsonRpcClient.SENT_PAYLOAD_HISTORY) {
+            const evicted = this.sentPayloadQueue.shift();
+            if (evicted !== undefined) this.sentPayloads.delete(evicted);
+        }
+    }
+
+    private writeStdin(payload: string): void {
+        this.trackSent(payload);
+        this.proc.stdin?.write(payload + '\n');
     }
 
     private attach(): void {
@@ -184,6 +302,15 @@ export class JsonRpcClient {
     }
 
     private handleLine(line: string): void {
+        // Drop TTY echo of our own outbound payloads (see `sentPayloads`). The
+        // stdout split already strips '\n'; strip a trailing '\r' too since a
+        // TTY in non-raw mode may translate NL to CR-NL on the echoed bytes.
+        const echoKey = line.replace(/\r+$/, '');
+        if (this.sentPayloads.has(echoKey)) {
+            this.sentPayloads.delete(echoKey);
+            this.handlers.onStderr(`[echo-dropped] ${echoKey}`);
+            return;
+        }
         let msg: JsonRpcMessage;
         try {
             msg = JSON.parse(line) as JsonRpcMessage;
@@ -239,22 +366,24 @@ export class JsonRpcClient {
     private writeResponse(id: number, result: unknown): void {
         const resp: JsonRpcResponse = { jsonrpc: '2.0', id, result };
         this.handlers.onRawMessage?.('out', resp);
-        this.proc.stdin?.write(JSON.stringify(resp) + '\n');
+        this.writeStdin(JSON.stringify(resp));
     }
 
     private writeError(id: number, code: number, message: string, data?: unknown): void {
         const resp: JsonRpcResponse = { jsonrpc: '2.0', id, error: { code, message, data } };
         this.handlers.onRawMessage?.('out', resp);
-        this.proc.stdin?.write(JSON.stringify(resp) + '\n');
+        this.writeStdin(JSON.stringify(resp));
     }
 
     sendRequest<T = unknown>(method: string, params?: unknown): Promise<T> {
         const id = this.nextId++;
         const req: JsonRpcRequest = { jsonrpc: '2.0', id, method, params };
         this.handlers.onRawMessage?.('out', req);
+        const payload = JSON.stringify(req);
         return new Promise<T>((resolve, reject) => {
             this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
-            this.proc.stdin?.write(JSON.stringify(req) + '\n', (err) => {
+            this.trackSent(payload);
+            this.proc.stdin?.write(payload + '\n', (err) => {
                 if (err) {
                     this.pending.delete(id);
                     reject(err);
@@ -266,7 +395,7 @@ export class JsonRpcClient {
     sendNotification(method: string, params?: unknown): void {
         const notif: JsonRpcNotification = { jsonrpc: '2.0', method, params };
         this.handlers.onRawMessage?.('out', notif);
-        this.proc.stdin?.write(JSON.stringify(notif) + '\n');
+        this.writeStdin(JSON.stringify(notif));
     }
 }
 
@@ -325,6 +454,38 @@ function toolCallFromAcp(
     return result;
 }
 
+/**
+ * Normalize a todowrite item `status` into the ACP PlanEntryStatus union.
+ * Kilo's todowrite accepts `pending | in_progress | completed | cancelled`,
+ * but PlanEntry only models the first three; `cancelled` (and any unknown
+ * value) collapses to `completed` so the live Plan panel shows the item as
+ * resolved rather than perpetually pending.
+ */
+function normalizePlanStatus(value: unknown): PlanEntryStatus {
+    switch (value) {
+        case 'pending':
+        case 'in_progress':
+        case 'completed':
+            return value;
+        case 'cancelled':
+            return 'completed';
+        default:
+            return 'pending';
+    }
+}
+
+/** Normalize a todowrite item `priority` into the PlanEntryPriority union. */
+function normalizePlanPriority(value: unknown): PlanEntryPriority {
+    switch (value) {
+        case 'high':
+        case 'medium':
+        case 'low':
+            return value;
+        default:
+            return 'medium';
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-session turn state — shared between ACPClient and ACPSession
 // ---------------------------------------------------------------------------
@@ -339,6 +500,17 @@ interface TurnAccumulator {
     toolCalls: Map<string, ACPToolCall>;
     toolCallOrder: string[];           // preserve invocation order
     loggedToolCalls: Set<string>;       // dedup tool-call log output
+    /**
+     * callIDs known to belong to the `todowrite` tool. Kilo's ACP no
+     * longer sends a dedicated `plan` session update; the todo list now
+     * arrives as the `todowrite` tool's input. The ACP `kind` field maps
+     * todowrite to the generic `other` kind (kilo acp/tool.ts toToolKind),
+     * so we detect it via the pending tool_call's `title === 'todowrite'`
+     * and remember the callID so later `tool_call_update`s (whose title
+     * becomes `"<n> todos"`) can still be recognized and their
+     * `rawInput.todos` forwarded to the live Plan panel.
+     */
+    todowriteCallIds: Set<string>;
     inFlightResolvers: Array<{
         resolve: (resp: ACPResponse) => void;
         reject: (err: Error) => void;
@@ -361,6 +533,7 @@ function makeAccumulator(): TurnAccumulator {
         toolCalls: new Map(),
         toolCallOrder: [],
         loggedToolCalls: new Set(),
+        todowriteCallIds: new Set(),
         inFlightResolvers: null,
         stopReason: 'end_turn',
         envBlockLogged: false,
@@ -372,21 +545,46 @@ function makeAccumulator(): TurnAccumulator {
 // ---------------------------------------------------------------------------
 
 export class ACPClient {
-    private proc: ChildProcess | null = null;
+    private proc: AcpTransport | null = null;
     private rpc: JsonRpcClient | null = null;
     private sessions = new Map<string, { accumulator: TurnAccumulator }>();
+    /**
+     * Session ID of the turn currently in flight (set by sendPrompt, cleared
+     * when the turn settles). Used to recover from kilo acp reporting a
+     * session/update for a session ID that doesn't match the one returned by
+     * session/new — see handleSessionUpdate's unknown-session branch.
+     */
+    private activeTurnSessionId: string | null = null;
+    /**
+     * Maps an agent-reported session ID (seen in session/update) onto the
+     * locally-tracked session ID when the two diverge. Populated lazily by
+     * handleSessionUpdate so subsequent updates resolve directly.
+     */
+    private sessionIdAliases = new Map<string, string>();
+    /**
+     * Reset callback for the in-flight turn's inactivity timer. Invoked on
+     * every session/update so legitimately long turns aren't killed — only
+     * turns that go completely silent. Null when no turn is in flight.
+     */
+    private resetTurnInactivity: (() => void) | null = null;
     private started = false;
     private readonly cwd: string;
+    private readonly acpCwd: string;
     private readonly kiloBinary: string;
+    private readonly useWineBridge: boolean;
     private readonly initTimeoutMs: number;
+    private readonly turnInactivityTimeoutMs: number;
     private readonly extraEnv: Record<string, string>;
     private readonly logger: ACPLogger;
     private readonly traceJsonRpc: boolean;
 
     private constructor(options: ACPClientOptions) {
         this.cwd = options.cwd;
+        this.acpCwd = options.acpCwd ?? options.cwd;
         this.kiloBinary = options.kiloBinary ?? 'kilo';
+        this.useWineBridge = options.useWineBridge ?? false;
         this.initTimeoutMs = options.initTimeoutMs ?? 60_000;
+        this.turnInactivityTimeoutMs = options.turnInactivityTimeoutMs ?? 0;
         this.extraEnv = options.extraEnv ?? {};
         this.logger = options.logger ?? defaultLogger;
         this.traceJsonRpc = options.traceJsonRpc ?? false;
@@ -402,6 +600,9 @@ export class ACPClient {
             kiloBinary: options.kiloBinary ?? 'kilo',
             initTimeoutMs: options.initTimeoutMs ?? 60_000,
         };
+        if (options.acpCwd !== undefined) initOptions.acpCwd = options.acpCwd;
+        if (options.useWineBridge !== undefined) initOptions.useWineBridge = options.useWineBridge;
+        if (options.turnInactivityTimeoutMs !== undefined) initOptions.turnInactivityTimeoutMs = options.turnInactivityTimeoutMs;
         if (options.extraEnv !== undefined) initOptions.extraEnv = options.extraEnv;
         if (options.logger !== undefined) initOptions.logger = options.logger;
         const client = new ACPClient(initOptions);
@@ -410,7 +611,6 @@ export class ACPClient {
     }
 
     private async _start(): Promise<void> {
-        this.logger.info(`Starting kilo acp subprocess (cwd: ${this.cwd})`);
         const env: Record<string, string> = {
             ...process.env as Record<string, string>,
             ...this.extraEnv,
@@ -419,18 +619,26 @@ export class ACPClient {
         };
         env['PATH'] = `/usr/local/lib/node_modules/.bin:/usr/lib/node_modules/.bin:/usr/local/bin:/usr/bin:/bin:${env['PATH'] || ''}`;
 
-        const proc = spawn(this.kiloBinary, ['acp'], {
-            cwd: this.cwd,
-            env,
-            stdio: ['pipe', 'pipe', 'pipe'],
-        }) as ChildProcess;
-        this.proc = proc;
-
-        const spawnError = new Promise<never>((_, reject) => {
-            proc.on('error', (err) => {
-                reject(new Error(`failed to spawn ${this.kiloBinary} acp: ${err.message}`));
+        let proc: AcpTransport;
+        let spawnError: Promise<never>;
+        if (this.useWineBridge) {
+            this.logger.info(`Starting kilo acp via Wine bridge (kilo.exe: ${KILO_WINDOWS_EXE}, spawn cwd: ${this.cwd}, acp cwd: ${this.acpCwd})`);
+            ({ transport: proc, spawnError } = await this.startWineBridge(env));
+        } else {
+            this.logger.info(`Starting kilo acp subprocess (engine binary: ${this.kiloBinary}, spawn cwd: ${this.cwd}, acp cwd: ${this.acpCwd})`);
+            const child = spawn(this.kiloBinary, ['acp'], {
+                cwd: this.cwd,
+                env,
+                stdio: ['pipe', 'pipe', 'pipe'],
             });
-        });
+            spawnError = new Promise<never>((_, reject) => {
+                child.on('error', (err) => {
+                    reject(new Error(`failed to spawn ${this.kiloBinary} acp: ${err.message}`));
+                });
+            });
+            proc = child;
+        }
+        this.proc = proc;
 
         const rpc = new JsonRpcClient(proc, {
             onNotification: (method, params) => this.onAcpNotification(method, params),
@@ -464,6 +672,89 @@ export class ACPClient {
     }
 
     /**
+     * Start `kilo acp` under Wine via the `wine-acp-bridge.cjs` helper and
+     * return a socket-backed transport once the bridge connects back.
+     *
+     * Flow: we listen on an ephemeral loopback TCP port, spawn
+     * `wine node.exe wine-acp-bridge.cjs <port> <acpCwd> <kilo.exe>`, and wait
+     * for the bridge to connect. The bridge spawns `kilo.exe acp` over native
+     * Win32 pipes (which kilo can read — a Unix pipe/socket cannot be exposed
+     * to it) and relays the ndjson JSON-RPC stream over the socket.
+     */
+    private startWineBridge(env: Record<string, string>): Promise<{ transport: AcpTransport; spawnError: Promise<never> }> {
+        return new Promise((resolve, reject) => {
+            const server = net.createServer();
+            let child: ChildProcess | null = null;
+            let settled = false;
+
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                try { child?.kill('SIGTERM'); } catch { /* ignore */ }
+                try { server.close(); } catch { /* ignore */ }
+                reject(new Error(`wine acp bridge did not connect within ${this.initTimeoutMs}ms`));
+            }, this.initTimeoutMs);
+
+            server.on('error', (err) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                reject(new Error(`wine acp bridge server error: ${err.message}`));
+            });
+
+            server.once('connection', (socket) => {
+                if (settled) { socket.destroy(); return; }
+                settled = true;
+                clearTimeout(timer);
+                socket.setNoDelay(true);
+                // Stop accepting further connections; the established socket
+                // stays open.
+                server.close();
+                const transport = new WineBridgeTransport(socket, child as ChildProcess, server);
+                const spawnError = new Promise<never>((_, rej) => {
+                    (child as ChildProcess).on('error', (err) => {
+                        rej(new Error(`failed to spawn wine acp bridge: ${err.message}`));
+                    });
+                    (child as ChildProcess).on('exit', (code) => {
+                        if (code !== 0 && code !== null) {
+                            rej(new Error(`wine acp bridge exited with code ${code}`));
+                        }
+                    });
+                });
+                resolve({ transport, spawnError });
+            });
+
+            server.listen(0, '127.0.0.1', () => {
+                const address = server.address();
+                const port = typeof address === 'object' && address ? address.port : 0;
+                const args = [
+                    WINE_NODE_EXE,
+                    WINE_ACP_BRIDGE,
+                    String(port),
+                    this.acpCwd,
+                    KILO_WINDOWS_EXE,
+                    WINE_ACP_BRIDGE_LOG,
+                ];
+                // The bridge's own stdio is ignored (routed to /dev/null, a file
+                // handle Wine accepts) so it never touches Unix pipe/socket std
+                // handles; it talks to us purely over the TCP socket.
+                child = spawn(WINE_BINARY, args, {
+                    cwd: this.cwd,
+                    env,
+                    stdio: ['ignore', 'ignore', 'ignore'],
+                });
+                child.on('error', (err) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    try { server.close(); } catch { /* ignore */ }
+                    reject(new Error(`failed to spawn wine acp bridge: ${err.message}`));
+                });
+            });
+        });
+    }
+
+    /**
      * Test seam: inject a custom JsonRpcClient and skip the kilo acp spawn.
      * Used by tests/unit/acp-client.test.ts.
      */
@@ -485,7 +776,7 @@ export class ACPClient {
         AgentStatus.clearPlan();
 
         const result = await this.rpc.sendRequest<SessionNewResult>('session/new', {
-            cwd: this.cwd,
+            cwd: this.acpCwd,
             mcpServers: config.mcpServers ?? [],
         });
         const sessionId = result.sessionId;
@@ -563,14 +854,38 @@ export class ACPClient {
 
     /** Internal: dispatch a session/update notification. */
     handleSessionUpdate(sessionId: string, update: SessionUpdate): void {
-        let entry = this.sessions.get(sessionId);
+        // Resolve any previously-learned alias for this agent-reported id.
+        const aliasTarget = this.sessionIdAliases.get(sessionId);
+        let entry = this.sessions.get(aliasTarget ?? sessionId);
         if (!entry) {
-            // The agent may send an update for a session we just closed
-            // (e.g. a final tool_call_update arrives after we deleted
-            // the session). Drop the update silently instead of erroring.
+            // kilo acp sometimes reports a session/update for a session ID
+            // that doesn't match the one session/new returned for us. If a
+            // single turn is in flight, adopt this id onto that turn instead
+            // of dropping the update — otherwise the accumulator never fills
+            // and sendPrompt hangs until the orchestrator's inactivity timer
+            // fires. We alias the id so later updates resolve directly.
+            if (this.activeTurnSessionId) {
+                const active = this.sessions.get(this.activeTurnSessionId);
+                if (active && active.accumulator.inFlightResolvers) {
+                    this.sessionIdAliases.set(sessionId, this.activeTurnSessionId);
+                    this.logger.err(
+                        `session/update for unknown session ${sessionId}; ` +
+                        `aliasing onto active turn ${this.activeTurnSessionId}`,
+                    );
+                    entry = active;
+                }
+            }
+        }
+        if (!entry) {
+            // No in-flight turn to attribute this to — the agent may be
+            // sending an update for a session we just closed (e.g. a final
+            // tool_call_update after we deleted the session). Drop silently.
             this.logger.err(`session/update for unknown session ${sessionId}`);
             return;
         }
+        // Any update counts as turn activity: reset the inactivity timer so a
+        // legitimately long turn isn't killed.
+        if (this.resetTurnInactivity) this.resetTurnInactivity();
         const acc = entry.accumulator;
         switch (update.sessionUpdate) {
             case 'agent_message_chunk': {
@@ -613,6 +928,15 @@ export class ACPClient {
                 const tc = toolCallFromAcp(update, 'pending');
                 acc.toolCalls.set(tc.callID, tc);
                 acc.toolCallOrder.push(tc.callID);
+                // The initial pending tool_call is the only update whose
+                // title is the raw tool name ('todowrite'); later updates
+                // rename it to "<n> todos". Remember the callID now so we
+                // can recognize its updates and forward the todo list to
+                // the live Plan panel.
+                if (this.isTodowriteToolCall(update.title)) {
+                    acc.todowriteCallIds.add(tc.callID);
+                }
+                this.maybeForwardTodos(acc, tc);
                 this.maybeLogToolCall(acc, tc);
                 return;
             }
@@ -621,16 +945,16 @@ export class ACPClient {
                 const merged: ACPToolCall = toolCallFromAcp(update, existing?.status ?? 'pending', existing);
                 acc.toolCalls.set(update.toolCallId, merged);
                 if (!existing) acc.toolCallOrder.push(update.toolCallId);
+                this.maybeForwardTodos(acc, merged);
                 this.maybeLogToolCall(acc, merged);
                 return;
             }
             case 'plan': {
-                // Kilo sends todowrite's todos as a `plan` notification
-                // (with PlanEntry[]), separate from the tool_call
-                // notifications for the todowrite tool itself. See kilo
-                // acp/agent.ts:354-379. Log the todos here and skip the
-                // tool call's own log line in maybeLogToolCall to avoid
-                // double-logging.
+                // Legacy path: older Kilo builds sent todowrite's todos as a
+                // dedicated `plan` notification (PlanEntry[]). Current Kilo
+                // builds deliver them through the `todowrite` tool call
+                // instead (handled in tool_call / tool_call_update via
+                // maybeForwardTodos). Kept for backwards compatibility.
                 const logLine = this.formatPlanLog(update.entries);
                 if (logLine) this.logger.info(logLine);
                 AgentStatus.setPlanEntries(update.entries);
@@ -744,15 +1068,59 @@ export class ACPClient {
         }
 
         return new Promise<ACPResponse>((resolve, reject) => {
+            // Track which session owns the in-flight turn so handleSessionUpdate
+            // can recover from a mismatched agent-reported session ID.
+            this.activeTurnSessionId = sessionId;
+
+            // Client-side inactivity watchdog. If kilo acp produces no
+            // session/update activity for turnInactivityTimeoutMs while the
+            // turn is in flight, reject locally with a clear error instead of
+            // hanging until the orchestrator's AGENT_MAX_TIMEOUT fires. The
+            // timer is reset on every update via this.resetTurnInactivity.
+            let settled = false;
+            let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+            const clearInactivity = () => {
+                if (inactivityTimer) {
+                    clearTimeout(inactivityTimer);
+                    inactivityTimer = null;
+                }
+                this.resetTurnInactivity = null;
+            };
+            const armInactivity = () => {
+                if (this.turnInactivityTimeoutMs <= 0) return;
+                if (inactivityTimer) clearTimeout(inactivityTimer);
+                inactivityTimer = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    clearInactivity();
+                    this.activeTurnSessionId = null;
+                    const resolvers = acc.inFlightResolvers;
+                    acc.inFlightResolvers = null;
+                    const err = new Error(
+                        `ACP turn inactivity timeout: no session/update for ` +
+                        `${this.turnInactivityTimeoutMs}ms (session ${sessionId}). ` +
+                        `The kilo acp subprocess appears stuck.`,
+                    );
+                    // Best-effort cancel so the subprocess stops the turn.
+                    try { this.cancelSession(sessionId); } catch { /* ignore */ }
+                    if (resolvers) resolvers.forEach((r) => r.reject(err));
+                }, this.turnInactivityTimeoutMs);
+            };
+            this.resetTurnInactivity = armInactivity;
+            armInactivity();
+
+            const finish = () => {
+                clearInactivity();
+                this.activeTurnSessionId = null;
+            };
+
             acc.inFlightResolvers = [{
-                resolve: (resp) => resolve(resp),
-                reject: (err) => reject(err),
+                resolve: (resp) => { finish(); resolve(resp); },
+                reject: (err) => { finish(); reject(err); },
             }];
 
             // Set up a turn-completion promise that resolves when the
-            // session/prompt JSON-RPC response arrives. There is no
-            // client-side wall-clock cap: the orchestrator's inactivity
-            // timer is the sole safety net for stuck turns.
+            // session/prompt JSON-RPC response arrives.
             const turnPromise = this.rpc!.sendRequest<{ stopReason?: string; usage?: Usage }>('session/prompt', {
                 sessionId,
                 prompt,
@@ -760,6 +1128,8 @@ export class ACPClient {
 
             turnPromise.then(
                 (result) => {
+                    if (settled) return;
+                    settled = true;
                     acc.stopReason = result?.stopReason ?? 'end_turn';
                     if (result?.usage) {
                         AgentStatus.setUsage(result.usage);
@@ -780,6 +1150,8 @@ export class ACPClient {
                     if (resolvers) resolvers.forEach((r) => r.resolve(response));
                 },
                 (err) => {
+                    if (settled) return;
+                    settled = true;
                     const resolvers = acc.inFlightResolvers;
                     acc.inFlightResolvers = null;
                     if (resolvers) resolvers.forEach((r) => r.reject(err));
@@ -826,17 +1198,57 @@ export class ACPClient {
     // opencode-server.ts so the orchestrator log shape is unchanged.
     // -------------------------------------------------------------------------
 
+    /**
+     * True when a tool_call's title identifies it as the `todowrite`
+     * tool. Kilo sets the pending tool_call's title to the raw tool name;
+     * the ACP `kind` is the generic `other`, so the title is the only
+     * reliable discriminator at first-sight.
+     */
+    private isTodowriteToolCall(title: string | null | undefined): boolean {
+        return typeof title === 'string' && title.trim().toLowerCase() === 'todowrite';
+    }
+
+    /**
+     * If `tc` is a todowrite tool call carrying a todo list in its input,
+     * convert the todos to PlanEntry[] and forward them to AgentStatus so
+     * the web-UI live Plan panel updates. Also logs the todo list (once
+     * per change) in the same `[TODOS]:` shape the legacy `plan`
+     * notification used.
+     */
+    private maybeForwardTodos(acc: TurnAccumulator, tc: ACPToolCall): void {
+        if (!acc.todowriteCallIds.has(tc.callID)) return;
+        const rawTodos = tc.input?.['todos'];
+        if (!Array.isArray(rawTodos) || rawTodos.length === 0) return;
+
+        const entries: PlanEntry[] = [];
+        for (const t of rawTodos) {
+            if (!t || typeof t !== 'object') continue;
+            const todo = t as Record<string, unknown>;
+            const content = typeof todo['content'] === 'string' ? todo['content'] : '';
+            entries.push({
+                content,
+                status: normalizePlanStatus(todo['status']),
+                priority: normalizePlanPriority(todo['priority']),
+            });
+        }
+        if (entries.length === 0) return;
+
+        const logLine = this.formatPlanLog(entries);
+        if (logLine) this.logger.info(logLine);
+        AgentStatus.setPlanEntries(entries);
+    }
+
     private maybeLogToolCall(acc: TurnAccumulator, tc: ACPToolCall): void {
         if (acc.loggedToolCalls.has(tc.callID)) return;
         const toolName = tc.tool || 'unknown';
         // `diff` is a content type within a tool call, not a separate tool.
         if (toolName === 'diff') return;
-        // `todowrite` todos are logged via the separate `plan`
-        // notification (see handleSessionUpdate's `case 'plan'`). Skip
-        // here to avoid double-logging an empty line — the initial
-        // `tool_call` for todowrite has `rawInput: {}` and `status:
-        // 'pending'`, which would otherwise log a bare `[TODOS]`.
-        if (toolName === 'todowrite') return;
+        // `todowrite` todos are logged via maybeForwardTodos (in the
+        // `[TODOS]:` shape) — skip the generic tool-call log line here so
+        // we don't double-log a bare `[TOOL] other` entry. The todowrite
+        // call is identified by callID (kilo maps its ACP kind to the
+        // generic `other`, so tc.tool is not 'todowrite').
+        if (toolName === 'todowrite' || acc.todowriteCallIds.has(tc.callID)) return;
 
         const status = tc.status;
         const isFinished = status === 'completed' || status === 'failed';
@@ -854,9 +1266,28 @@ export class ACPClient {
         // into `formatToolLog` itself so the caller stays a
         // one-liner.
         process.stdout.write(
-            this.formatToolLog(toolName, tc.input, !acc.envBlockLogged),
+            this.formatToolLog(this.resolveLogToolName(tc), tc.input, !acc.envBlockLogged),
         );
         acc.envBlockLogged = true;
+    }
+
+    /**
+     * Resolve the tool name to use for logging. Kilo maps many tool names
+     * (task, skill, websearch, lsp, apply_patch, agent_manager, recall,
+     * background_process, codebase_search, plan_exit, ...) to the generic
+     * ACP `other` kind, so `tc.tool` is just `'other'` and the operator
+     * can't tell which tool ran. Kilo sets the pending tool_call's `title`
+     * to the raw tool name, so for `other`-kind calls we recover the real
+     * name from the title when it looks like a bare tool id (lowercase /
+     * underscores, no spaces). Falls back to `tc.tool` otherwise (e.g.
+     * once the title is humanized to "3 todos").
+     */
+    private resolveLogToolName(tc: ACPToolCall): string {
+        const kind = tc.tool || 'unknown';
+        if (kind !== 'other') return kind;
+        const title = tc.title?.trim();
+        if (title && /^[a-z][a-z0-9_]*$/.test(title)) return title;
+        return kind;
     }
 
     /**
@@ -867,7 +1298,7 @@ export class ACPClient {
      * `2026-06-08T01:09:02+02:00`).
      */
     private formatEnvironmentDetails(): string {
-        const cwd = process.cwd();
+        const cwd = this.acpCwd;
         const d = new Date();
         const pad = (n: number): string => String(n).padStart(2, '0');
         const yyyy = d.getFullYear();

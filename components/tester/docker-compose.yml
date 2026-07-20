@@ -1,0 +1,76 @@
+# OpenVelo tester_rewrite — standalone debug-mode docker-compose
+#
+# Starts the tester_rewrite container with TESTER_DEBUG=true. In this
+# mode the orchestrator WS handshake is NOT received, so every field the
+# orchestrator would normally send is read from the DEBUG_* environment
+# variables listed in .env.example.
+#
+# Usage:
+#   cp .env.example .env
+#   # fill in DEBUG_REPO_URL, DEBUG_BACKEND, DEBUG_EXECUTION_MODEL, etc.
+#   docker compose up -d
+#   docker attach openvelo-tester-rewrite   # or:
+#   docker exec -it openvelo-tester-rewrite bash
+#
+# To expose the X display, connect a VNC client to vnc://localhost:5900.
+# In debug mode x11vnc is started in interactive (non-view-only) mode.
+
+name: openvelo-tester
+
+services:
+  tester-rewrite:
+    container_name: openvelo-tester
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openvelo-tester:linux
+    # Load DEBUG_* (and TESTER_DEBUG / VNC_VIEW_ONLY) from .env. The file
+    # is mounted relative to this docker-compose.yml so it lives next to
+    # .env.example at components/tester_rewrite/.env.
+    env_file:
+      - .env
+    environment:
+      # Re-pin the two non-DEBUG flags here so they're set even if .env
+      # is missing them (the env_file entries below still override).
+      - TESTER_DEBUG=${TESTER_DEBUG:-true}
+      - VNC_VIEW_ONLY=${VNC_VIEW_ONLY:-false}
+      # Display / VNC port / keepalive HTTP port (also in .env under
+      # DEBUG_*; explicit env takes precedence over env_file).
+      - DISPLAY=${DEBUG_DISPLAY:-:99}
+      - SCREEN_W=${DEBUG_SCREEN_W:-1280}
+      - SCREEN_H=${DEBUG_SCREEN_H:-1024}
+      - SCREEN_DEPTH=${DEBUG_SCREEN_DEPTH:-24}
+      - PORT_VNC=${DEBUG_PORT_VNC:-5900}
+      - TESTER_PORT=${DEBUG_TESTER_PORT:-8081}
+      # Controller MCP server (started by entrypoint.sh before the
+      # workflow). Reachable at /mcp (streamable-http) or /sse.
+      - MCP_TRANSPORT=${DEBUG_MCP_TRANSPORT:-streamable-http}
+      - MCP_HOST=${DEBUG_MCP_HOST:-0.0.0.0}
+      - MCP_PORT=${DEBUG_MCP_PORT:-8765}
+    ports:
+      # x11vnc (interactive in TESTER_DEBUG=true by default).
+      - "${DEBUG_PORT_VNC:-5900}:${DEBUG_PORT_VNC:-5900}"
+      # Keepalive HTTP server started by node when in debug mode.
+      - "${DEBUG_TESTER_PORT:-8081}:${DEBUG_TESTER_PORT:-8081}"
+      # Controller MCP server (streamable-http or sse).
+      - "${DEBUG_MCP_PORT:-8765}:${DEBUG_MCP_PORT:-8765}"
+    # The container needs to run as PID 1 (entrypoint.sh) — `init: true`
+    # gives us a tiny init that reaps zombies so the entrypoint's `wait`
+    # chain doesn't accumulate defunct children.
+    init: true
+    # Stay running across `docker compose restart` etc.
+    restart: unless-stopped
+    # Give the container a generous default for `docker exec -it bash`
+    # to actually work (a TTY is needed for interactive shells).
+    tty: true
+    stdin_open: true
+    # Required so the tester can spawn `gbfs mount` (libfuse3 / FUSE)
+    # in the same way the web-ui does. /dev/fuse + SYS_ADMIN are the
+    # FUSE minimum; apparmor:unconfined works around Docker Desktop's
+    # default AppArmor profile.
+    devices:
+      - "/dev/fuse:/dev/fuse"
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined

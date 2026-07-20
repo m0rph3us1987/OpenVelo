@@ -10,6 +10,15 @@
 
 name: openvelo-web-ui
 
+# All OpenVelo components (web-ui, tester, dynamically-spawned
+# orchestrator + agent containers) share a single user-defined
+# bridge network called `openvelo` so they can reach each other by
+# container name without going through the host.
+networks:
+  openvelo:
+    name: openvelo
+    driver: bridge
+
 services:
   web-ui:
     container_name: openvelo-web-ui
@@ -17,6 +26,8 @@ services:
       context: ./components/web-ui
       dockerfile: Dockerfile
     image: openvelo-webui:linux
+    networks:
+      - openvelo
     ports:
       - "4500:3000"
     volumes:
@@ -40,12 +51,32 @@ services:
       - OPENVELO_CONTAINER_MODE=true
       - ORCHESTRATOR_IMAGE=openvelo-orchestrator:linux
       - OPENVELO_HOST_HOME=${HOME}
-      # Orchestrators dial back to web-ui over this URL
-      - WEB_UI_URL=ws://host.docker.internal:4500
+      # Orchestrators dial back to web-ui over the shared network; the
+      # web-ui self-rewrites this to the container's internal hostname
+      # when running inside Docker (see components/web-ui/src/api/routes/projects.ts).
+      - WEB_UI_URL=ws://openvelo-web-ui:3000
     extra_hosts:
       # Required on Linux so host.docker.internal resolves to the Docker host
       - "host.docker.internal:host-gateway"
+    # Required so web-ui can spawn `gbfs mount` (libfuse3 / FUSE).
+    # - /dev/fuse: FUSE character device from the host kernel module.
+    # - SYS_ADMIN: mount(2) and FUSE ioctls.
+    # - apparmor:unconfined: lets the FUSE kernel module proceed under
+    #   Docker Desktop's default AppArmor profile.
+    devices:
+      - "/dev/fuse:/dev/fuse"
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
     restart: unless-stopped
 
 # Orchestrator containers are spawned dynamically by the web-ui via dockerode.
 # They are NOT defined here — they appear and disappear as projects are started/stopped.
+# web-ui's docker-manager attaches them to the `openvelo` network so they can
+# reach the web-ui (and the tester, when one is running) by name.
+#
+# The tester component has its own docker-compose file at
+# components/tester/docker-compose.yml that also attaches to
+# the same `openvelo` network, so a tester started independently
+# joins the same flat topology.

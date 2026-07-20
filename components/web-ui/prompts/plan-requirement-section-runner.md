@@ -13,7 +13,7 @@ CHAT Q&A HISTORY:
 
 SKILLS & ARCHITECTURE CONVENTIONS (LOAD AS-NEEDED):
 First, read the Section Title ({SECTION_TITLE}) and Scope ({SECTION_SCOPE}) at the bottom of this message to understand the functional unit you are writing.
-- Check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. Based on the functional area you are writing, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
+- Check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. Based on the functional area you are writing, ONLY open and read the linked domain architecture files that are relevant. Do NOT load unrelated architecture docs.
 - Read `{SKILLS_DIR}/INDEX.md`. Evaluate which skill categories apply to the tech stack being used for this functional unit, and only open the specific linked `_INDEX.md` and `SKILL.md` files for those relevant skills. Do NOT load unrelated skill files.
 
 ---

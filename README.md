@@ -48,6 +48,8 @@
   - [Agent](#agent)
   - [Orchestrator](#orchestrator)
   - [Web UI](#web-ui)
+  - [Tester](#tester)
+  - [GBFS (Git Backed File System)](#gbfs-git-backed-file-system)
 - [Guides / Tutorials](#guides--tutorials)
 
 ---
@@ -86,7 +88,7 @@ OpenVelo consists of three components that work together. All AI interactions ar
             │ WS (log fan-out)             │ WS (job commands)
             ▼                              ▼ (outbound dial on startup)
     ┌───────────────┐          ┌───────────────────────────────────────┐
-    │  Browser      │          │  Orchestrator  (Node.js/TypeScript)   │
+    │  Browser      │          │  Orchestrator  (Go)                   │
     │  (any device) │          │  • WS client — dials web-ui on start  │
     └───────────────┘          │  • Receives assign_job from web-ui    │
                                │  • Manages running agent containers   │
@@ -94,11 +96,11 @@ OpenVelo consists of three components that work together. All AI interactions ar
                                └──────────────┬────────────────────────┘
                                               │ Docker Engine API (DooD)
                                               ▼
-                               ┌───────────────────────────┐
-                               │  Agent Container(s)       │
-                               │  6-phase lifecycle:       │
-                               │  Setup → Blueprint →      │
-                               │  [Implementing → Build    │
+                               ┌───────────────────────────┐     ┌────────────────────────┐
+                               │  Agent Container(s)       │◄───►│  Tester Component      │
+                               │  6-phase lifecycle:       │     │  • Shared network      │
+                               │  Setup → Blueprint →      │     │  • Reliable test runner│
+                               │  [Implementing → Build    │     └────────────────────────┘
                                │  & Test → Review]* →      │
                                │  Documenting → Push       │
                                │                           │
@@ -109,6 +111,7 @@ OpenVelo consists of three components that work together. All AI interactions ar
                                 │  └─────────────────────┘  │
                                │                           │
                                │  openvelo-agent:linux     │
+                               │  or openvelo-agent:wine   │
                                └───────────────────────────┘
 ```
 
@@ -117,7 +120,7 @@ OpenVelo consists of three components that work together. All AI interactions ar
 1. **Plan**: Click the **Plan** button on the project page to open the Planning modal. Chat with the AI through Analyze → Collect → Domain → Quiz → Assessment phases to produce a `REQUIREMENT.md` + structured backlog. Alternatively, you can use the Verify chat to validate and extract jobs from an existing requirements document.
 2. **Push**: Send the backlog to the project with a single click.
 3. **Execute**: The Web UI spawns an Orchestrator for the project (child process in dev mode, Docker container in Docker mode). The Orchestrator dials back to the web-ui via WebSocket and receives job assignments.
-4. **Agent**: Each container clones the repo, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, updates architectural documentation, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, Azure DevOps, or Bitbucket). Agent-side LLM calls are routed through the `kilo acp` subprocess speaking JSON-RPC 2.0. Blueprint, review, and documentation phases can each be routed to a different model via the project's **Agent Models** settings.
+4. **Agent**: Each container uses GBFS to instantly mount a shared repository instead of cloning from scratch, sets up the environment, creates an architectural blueprint, implements code changes, runs build/test in a retry loop with AI review, updates architectural documentation, and opens a PR to the working branch on the configured repo host (GitHub, Gitea, Azure DevOps, or Bitbucket). Agent-side LLM calls are routed through the `kilo acp` subprocess speaking JSON-RPC 2.0. Blueprint, review, and documentation phases can each be routed to a different model via the project's **Agent Models** settings.
 5. **Monitor**: The Execute dashboard streams live logs, job status, the agent's internal plan progress, token usage (input/output/cached), context window limits, and costs from the Orchestrator through the web-ui WebSocket in real time.
 
 ---
@@ -192,6 +195,7 @@ You can also build individual images — see [NPM Scripts](#npm-scripts) for all
 - Docker Desktop with Linux containers mode enabled.
 - Create a `.env` file in the root directory (see `.env.example`). Set `OPENVELO_DATA_DIR` to an absolute path on your host (e.g., `/home/user/openvelo-data`).
 - Kilo must be authenticated on the host — the compose file mounts `~/.local/share/kilo/auth.json` and `~/.config/kilo` into the container.
+- **Note:** The web-ui container requires FUSE privileges (`/dev/fuse`, `SYS_ADMIN`) to support the new GBFS (Git Backed File System) mounts.
 
 **Execution:**
 ```bash
@@ -247,7 +251,7 @@ OpenVelo uses **Kilo** as a unified AI proxy. The Models tab in the project form
 
 | Setting       | Description                                                             |
 | ------------- | ----------------------------------------------------------------------- |
-| Docker Image  | Image name for agent containers (default: `openvelo-agent:linux`)       |
+| Docker Image  | Image name for agent containers (default: `openvelo-agent:linux`, use `openvelo-agent:wine` for Windows executables) |
 | Build Command | Command to verify implementation (e.g. `npm run build`, `dotnet build`) |
 | Test Command  | Command to run tests (e.g. `npm test`, `dotnet test`)                   |
 
@@ -296,7 +300,7 @@ Setup → [ Blueprinting → Implementing → Testing → Reviewing ]* → Docum
 
 | Phase            | Stage String     | Description                                                                                                                                             |
 | ---------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Setup**        | `setup`          | Clones the repository, creates working branches, writes `kilo.json` permissions, initializes the Kilo ACP client, checks tools, and installs them        |
+| **Setup**        | `setup`          | Uses GBFS to instantly mount the shared repository, creates working branches, writes `kilo.json` permissions, initializes the Kilo ACP client, checks tools, and installs them        |
 | **Blueprint**    | `blueprinting`   | Evaluates the user story and repo architecture to produce a detailed `IMPLEMENTATION_PLAN.md` guiding code changes (uses `planner.txt` prompt).          |
 | **Implementing** | `implementing`   | On the first attempt, sends `implementer.txt` prompt and blueprint plan. On retries, sends the original story and injected failure context.               |
 | **Build & Test** | `testing`        | Runs build and test commands (uses `test.txt`). LLM writes `TEST_REPORT.json` containing verdict/error log. Failure loops back to Blueprinting.          |
@@ -363,10 +367,14 @@ OpenVelo/
 │   ├── agent/                 # AI agent — runs inside Docker containers
 │   │   ├── src/               # Agent source (TypeScript)
 │   │   ├── prompts/           # Agent skill references
-│   │   └── Dockerfile         # Linux agent image
+│   │   ├── Dockerfile         # Linux agent image
+│   │   └── Dockerfile.wine    # Wine agent image (Windows executable support)
 │   ├── orchestrator/          # Job orchestrator — manages agent containers
-│   │   ├── src/               # Orchestrator source (TypeScript)
+│   │   ├── internal/          # Orchestrator packages (Go)
+│   │   ├── main.go            # Orchestrator entrypoint
 │   │   └── Dockerfile         # Linux orchestrator image
+│   ├── gbfs/                  # Git Backed File System — shared repository mounts
+│   ├── tester/                # Dedicated test runner component
 │   └── web-ui/                # React SPA + Express backend
 │       ├── src/
 │       │   ├── api/           # Express REST API routes
@@ -397,15 +405,16 @@ All scripts are run from the repository root.
 | `npm run production` | Start the web-ui in production mode          |
 | `npm test`       | Run the web-ui test suite                        |
 
-### Docker — Linux
+### Docker — Linux / Wine
 
 | Script                              | Description                              |
 | ----------------------------------- | ---------------------------------------- |
 | `npm run docker-build-all-linux`    | Build all three images (agent, web-ui, orchestrator) |
 | `npm run docker-image-linux`        | Build only the Linux agent image         |
+| `npm run docker-image-wine`         | Build only the Wine agent image          |
 | `npm run docker-image-webui-linux`  | Build only the Linux web-ui image        |
 | `npm run docker-image-orch-linux`   | Build only the Linux orchestrator image  |
-| `npm run docker-image-linux-no-cache` | Rebuild agent image without Docker cache |
+| `npm run docker-image-linux-no-cache` | Rebuild Linux agent image without Docker cache |
 
 ---
 
@@ -417,7 +426,7 @@ The agent runs inside a Docker container and executes the 6-phase workflow (Setu
 
 ### Orchestrator
 
-The orchestrator is a Node.js/TypeScript process that manages the lifecycle of agent containers for a single project. It:
+The orchestrator is a Go process that manages the lifecycle of agent containers for a single project. It:
 
 - Connects to the web-ui via WebSocket on startup.
 - Receives job assignments from the web-ui.
@@ -426,7 +435,7 @@ The orchestrator is a Node.js/TypeScript process that manages the lifecycle of a
 - Forwards logs and status updates back to the web-ui.
 - Handles container retries on failure.
 
-In development mode, the orchestrator runs as a child process. In Docker mode, it runs as a dynamically spawned container.
+In development mode, the orchestrator is built and run as a child process. In Docker mode, it runs as a dynamically spawned container on the shared `openvelo` Docker network.
 
 ### Web UI
 
@@ -439,6 +448,19 @@ The web-ui is a React SPA (Vite + Tailwind CSS + Radix UI) backed by an Express 
 - **Settings**: Application-wide settings including theme customization and security toggle.
 - **Database**: SQLite via `better-sqlite3` for all persistent state.
 - **Orchestrator lifecycle**: Spawns and manages orchestrator processes/containers via `dockerode`.
+
+### Tester
+
+A dedicated test runner component that operates on the shared `openvelo` Docker network. It coordinates and executes test pipelines reliably alongside the orchestrator and agent containers.
+
+**Test Generation & Self-Healing Flow:**
+- During the planning phase, you can choose to automatically generate **test jobs** alongside your implementation jobs.
+- If a test job fails during any of its tasks, the system automatically generates an **implementation job for self-healing** to diagnose and fix the issue.
+- Once the self-healing job completes, the next test iteration will resume the original plan from the last failed test. This continuous testing and fixing loop ensures features are robust before completion.
+
+### GBFS (Git Backed File System)
+
+GBFS is a FUSE-based filesystem that allows multiple agent containers to share a single, instant repository mount. Instead of performing a slow `git clone` for every new agent, GBFS mounts the repository instantly. This saves significant disk space and drastically reduces agent container startup time.
 
 ---
 

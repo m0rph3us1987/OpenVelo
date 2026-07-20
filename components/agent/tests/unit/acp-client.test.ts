@@ -82,8 +82,10 @@ describe('ACPClient session/update handling', () => {
                 toolCalls: new Map(),
                 toolCallOrder: [],
                 loggedToolCalls: new Set(),
+                todowriteCallIds: new Set(),
                 inFlightResolvers: null,
                 stopReason: 'end_turn',
+                envBlockLogged: false,
             },
         });
     });
@@ -254,6 +256,55 @@ describe('ACPClient session/update handling', () => {
         ]);
     });
 
+    it('todowrite tool call forwards todos to AgentStatus and logs [TODOS]:', () => {
+        const acc = client.getAccumulator('ses_t')!;
+        acc.toolCalls.clear();
+        acc.toolCallOrder = [];
+        acc.loggedToolCalls.clear();
+        acc.todowriteCallIds.clear();
+        logger.lines.length = 0;
+        AgentStatus.setPlanEntries([]);
+
+        // Initial pending tool_call: title is the raw tool name, kind is
+        // the generic 'other', rawInput is empty.
+        client.handleSessionUpdate('ses_t', {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'call_todo',
+            title: 'todowrite',
+            kind: 'other',
+            status: 'pending',
+        });
+        // The callID is now tracked as a todowrite call.
+        assert.ok(acc.todowriteCallIds.has('call_todo'));
+
+        // Running update carries the todo list in rawInput; title is
+        // renamed to "<n> todos".
+        client.handleSessionUpdate('ses_t', {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'call_todo',
+            status: 'in_progress',
+            title: '2 todos',
+            rawInput: {
+                todos: [
+                    { content: 'Bring repo to State X', status: 'completed', priority: 'high' },
+                    { content: 'Restore dependencies', status: 'in_progress', priority: 'medium' },
+                    { content: 'Skipped step', status: 'cancelled', priority: 'low' },
+                ],
+            },
+        });
+
+        // Forwarded to AgentStatus (cancelled collapses to completed).
+        assert.deepStrictEqual(AgentStatus.planEntries, [
+            { content: 'Bring repo to State X', status: 'completed', priority: 'high' },
+            { content: 'Restore dependencies', status: 'in_progress', priority: 'medium' },
+            { content: 'Skipped step', status: 'completed', priority: 'low' },
+        ]);
+        // Logged in the [TODOS]: shape, not as a bare [TOOL] other line.
+        assert.deepStrictEqual(logger.lines, [
+            'INFO: [TODOS]:\n  [✓] Bring repo to State X\n  [◐] Restore dependencies\n  [✓] Skipped step',
+        ]);
+    });
+
     it('user_message_chunk / current_mode_update / config_option_update / session_info_update are no-ops', () => {
         const acc = client.getAccumulator('ses_t')!;
         acc.text = 'unchanged';
@@ -411,14 +462,16 @@ describe('ACPClient tool call logging', () => {
             initTimeoutMs: 1000,
             logger,
         });
-        (client as unknown as { sessions: Map<string, { accumulator: { text: string; toolCalls: Map<string, unknown>; toolCallOrder: string[]; loggedToolCalls: Set<string>; inFlightResolvers: null; stopReason: string } }> }).sessions.set('ses_log', {
+        (client as unknown as { sessions: Map<string, { accumulator: { text: string; toolCalls: Map<string, unknown>; toolCallOrder: string[]; loggedToolCalls: Set<string>; todowriteCallIds: Set<string>; inFlightResolvers: null; stopReason: string; envBlockLogged: boolean } }> }).sessions.set('ses_log', {
             accumulator: {
                 text: '',
                 toolCalls: new Map(),
                 toolCallOrder: [],
                 loggedToolCalls: new Set(),
+                todowriteCallIds: new Set(),
                 inFlightResolvers: null,
                 stopReason: 'end_turn',
+                envBlockLogged: false,
             },
         });
         // Capture process.stdout.write so we can assert on tool-call
@@ -646,6 +699,52 @@ describe('ACPClient tool call logging', () => {
             `unknown tool must show input JSON; got: ${JSON.stringify(stdoutLines)}`);
     });
 
+    it('other-kind tool with a bare tool-id title logs under its real name (e.g. [TASK], [TOOL] skill)', () => {
+        stdoutLines = [];
+        const acc = client.getAccumulator('ses_log')!;
+        acc.toolCalls.clear();
+        acc.toolCallOrder = [];
+        acc.loggedToolCalls.clear();
+        acc.envBlockLogged = false;
+        // Kilo maps `skill` to ACP kind `other`, but sets title to the
+        // raw tool name on the pending call. We recover it for logging.
+        client.handleSessionUpdate('ses_log', {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'c_skill',
+            status: 'completed',
+            kind: 'other',
+            title: 'skill',
+            rawInput: { name: 'kilo-config' },
+        });
+        const full = stdoutLines.join('');
+        assert.ok(full.includes('[TOOL] skill: {"name":"kilo-config"}'),
+            `other-kind tool must log under real name from title; got: ${JSON.stringify(stdoutLines)}`);
+        assert.ok(!full.includes('[TOOL] other:'),
+            'must not fall back to the opaque "other" name when a real name is recoverable');
+    });
+
+    it('other-kind tool with a humanized title falls back to the generic name', () => {
+        stdoutLines = [];
+        const acc = client.getAccumulator('ses_log')!;
+        acc.toolCalls.clear();
+        acc.toolCallOrder = [];
+        acc.loggedToolCalls.clear();
+        acc.envBlockLogged = false;
+        // A title with spaces / capitals is NOT a bare tool id, so we
+        // keep the generic `other` name rather than guessing.
+        client.handleSessionUpdate('ses_log', {
+            sessionUpdate: 'tool_call_update',
+            toolCallId: 'c_humanized',
+            status: 'completed',
+            kind: 'other',
+            title: 'Searching the web',
+            rawInput: { query: 'x' },
+        });
+        const full = stdoutLines.join('');
+        assert.ok(full.includes('[TOOL] other: {"query":"x"}'),
+            `humanized title must fall back to other; got: ${JSON.stringify(stdoutLines)}`);
+    });
+
     it('unknown tools with very long input get truncated to keep stdout readable', () => {
         stdoutLines = [];
         const acc = client.getAccumulator('ses_log')!;
@@ -671,7 +770,7 @@ describe('ACPClient tool call logging', () => {
         assert.ok(toolLine.includes('…'), 'truncated lines must end with ellipsis');
     });
 
-    it('todowrite tool calls are NOT logged (handled by plan notification instead)', () => {
+    it('todowrite tool calls are NOT logged directly (forwarded as [TODOS]: via maybeForwardTodos)', () => {
         stdoutLines = [];
         const acc = client.getAccumulator('ses_log')!;
         acc.toolCalls.clear();
@@ -995,12 +1094,13 @@ describe('ACPSession.setModel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Regression: sendPrompt has no client-side wall-clock cap. The orchestrator's
-// inactivity timer is the only safety net for stuck turns. See plan:
-// .kilo/plans/remove-agent-prompt-timeout.md.
+// Regression: with no turnInactivityTimeoutMs configured (default 0), sendPrompt
+// has no client-side wall-clock cap and resolves only when the underlying
+// session/prompt response arrives. The opt-in inactivity timer is covered
+// separately below.
 // ---------------------------------------------------------------------------
 
-describe('ACPClient.sendPrompt no client-side timeout', () => {
+describe('ACPClient.sendPrompt no client-side timeout (timer disabled)', () => {
     let client: ACPClient;
     let mock: MockRpc;
     let logger: ACPLogger & { lines: string[] };
@@ -1021,8 +1121,10 @@ describe('ACPClient.sendPrompt no client-side timeout', () => {
                 toolCalls: new Map(),
                 toolCallOrder: [],
                 loggedToolCalls: new Set(),
+                todowriteCallIds: new Set(),
                 inFlightResolvers: null,
                 stopReason: 'end_turn',
+                envBlockLogged: false,
             },
         });
     });
@@ -1062,3 +1164,155 @@ function makeAccumulator() {
         stopReason: 'end_turn',
     };
 }
+
+function fullAccumulator() {
+    return {
+        text: '',
+        toolCalls: new Map(),
+        toolCallOrder: [],
+        loggedToolCalls: new Set(),
+        todowriteCallIds: new Set(),
+        inFlightResolvers: null,
+        stopReason: 'end_turn',
+        envBlockLogged: false,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Recovery: kilo acp sometimes reports session/update for a session ID that
+// doesn't match the one session/new returned. While a single turn is in
+// flight, the client must adopt (alias) that id onto the active turn instead
+// of dropping the update — otherwise the accumulator never fills and the turn
+// hangs until the orchestrator's inactivity timer fires.
+// ---------------------------------------------------------------------------
+
+describe('ACPClient session/update mismatched-session recovery', () => {
+    let client: ACPClient;
+    let mock: MockRpc;
+    let logger: ACPLogger & { lines: string[] };
+
+    before(() => {
+        mock = makeMockRpc();
+        logger = makeCaptureLogger();
+        client = new (ACPClient as unknown as new (opts: unknown) => ACPClient)({
+            cwd: '/repo',
+            kiloBinary: 'kilo',
+            initTimeoutMs: 1000,
+            logger,
+        });
+        client.setRpcForTesting(mock as unknown as JsonRpcClient);
+        (client as unknown as { sessions: Map<string, unknown> }).sessions.set('ses_local', {
+            accumulator: fullAccumulator(),
+        });
+    });
+
+    after(() => { client.shutdown(); });
+
+    it('aliases an unknown session id onto the in-flight turn and assembles the response', async () => {
+        const sendPromise = (client as unknown as {
+            sendPrompt: (id: string, prompt: unknown, opts?: unknown) => Promise<unknown>;
+        }).sendPrompt('ses_local', [{ type: 'text', text: 'hi' }], {});
+
+        // The agent reports updates under a DIFFERENT session id.
+        client.handleSessionUpdate('ses_agent_mismatch', {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'recovered ' },
+        });
+        client.handleSessionUpdate('ses_agent_mismatch', {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'output' },
+        });
+
+        const pending = mock.pendingResolvers.get('session/prompt');
+        assert.ok(pending && pending.length === 1, 'session/prompt should be in flight');
+        pending![0]!.resolve({ stopReason: 'end_turn' });
+
+        const response = await sendPromise as { text: string; stopReason: string };
+        assert.strictEqual(response.text, 'recovered output');
+        assert.ok(
+            logger.lines.some((l) => l.includes('aliasing onto active turn ses_local')),
+            'expected an aliasing log line',
+        );
+    });
+
+    it('still drops an unknown-session update when no turn is in flight', () => {
+        logger.lines.length = 0;
+        client.handleSessionUpdate('ses_totally_unknown', {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'ignored' },
+        });
+        assert.ok(
+            logger.lines.some((l) => l.includes('unknown session ses_totally_unknown') && !l.includes('aliasing')),
+            'expected a plain drop log line with no aliasing',
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Safety net: when turnInactivityTimeoutMs is configured, a turn that receives
+// no session/update activity must reject locally instead of hanging forever.
+// ---------------------------------------------------------------------------
+
+describe('ACPClient.sendPrompt inactivity timeout (timer enabled)', () => {
+    let client: ACPClient;
+    let mock: MockRpc;
+
+    before(() => {
+        mock = makeMockRpc();
+        client = new (ACPClient as unknown as new (opts: unknown) => ACPClient)({
+            cwd: '/repo',
+            kiloBinary: 'kilo',
+            initTimeoutMs: 1000,
+            turnInactivityTimeoutMs: 40,
+            logger: makeCaptureLogger(),
+        });
+        client.setRpcForTesting(mock as unknown as JsonRpcClient);
+        (client as unknown as { sessions: Map<string, unknown> }).sessions.set('ses_to', {
+            accumulator: fullAccumulator(),
+        });
+    });
+
+    after(() => { client.shutdown(); });
+
+    it('rejects the turn when no session/update arrives within the timeout', async () => {
+        const sendPromise = (client as unknown as {
+            sendPrompt: (id: string, prompt: unknown, opts?: unknown) => Promise<unknown>;
+        }).sendPrompt('ses_to', [{ type: 'text', text: 'hi' }], {});
+
+        await assert.rejects(
+            sendPromise as Promise<unknown>,
+            /inactivity timeout/,
+            'turn should reject on inactivity',
+        );
+        // It should have sent a best-effort session/cancel notification.
+        assert.ok(
+            mock.calls.some((c) => c.method === 'session/cancel' && c.type === 'notification'),
+            'expected a session/cancel notification',
+        );
+    });
+
+    it('does NOT time out while session/update activity keeps arriving', async () => {
+        (client as unknown as { sessions: Map<string, unknown> }).sessions.set('ses_active', {
+            accumulator: fullAccumulator(),
+        });
+        const sendPromise = (client as unknown as {
+            sendPrompt: (id: string, prompt: unknown, opts?: unknown) => Promise<unknown>;
+        }).sendPrompt('ses_active', [{ type: 'text', text: 'hi' }], {});
+
+        // Keep the turn alive past the 40ms window with periodic activity.
+        for (let i = 0; i < 5; i++) {
+            await new Promise((r) => setTimeout(r, 20));
+            client.handleSessionUpdate('ses_active', {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'x' },
+            });
+        }
+
+        const pending = mock.pendingResolvers.get('session/prompt');
+        assert.ok(pending && pending.length >= 1, 'session/prompt should still be in flight');
+        pending![pending!.length - 1]!.resolve({ stopReason: 'end_turn' });
+
+        const response = await sendPromise as { stopReason: string };
+        assert.strictEqual(response.stopReason, 'end_turn');
+    });
+});

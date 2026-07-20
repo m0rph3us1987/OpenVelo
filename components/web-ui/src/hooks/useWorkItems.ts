@@ -40,19 +40,35 @@ export function useWorkItems({
     if (jobUpdates.length === 0) return;
     const lastUpdate = jobUpdates[jobUpdates.length - 1];
     if (!lastUpdate) return;
+
+    if (lastUpdate.status === 'COMPLETED' || lastUpdate.status === 'FAILED' || lastUpdate.status === 'PENDING') {
+      void fetchJobs();
+      return;
+    }
+
     setJobs((prev) =>
       topoSortJobs(
         prev.map((j) => {
           if (j.id !== lastUpdate.jobId) return j;
           const updated: Job = { ...j, status: lastUpdate.status as Job['status'] };
+          if (lastUpdate.passed_tests !== undefined) {
+            updated.passed_tests = lastUpdate.passed_tests;
+          }
           if (lastUpdate.status === 'PENDING') {
             updated.stage = null;
             updated.agent_attempt = null;
             updated.agent_max_retries = null;
+            updated.vnc_host_port = null;
           } else {
             if (lastUpdate.stage !== undefined) updated.stage = lastUpdate.stage;
             if (lastUpdate.agentAttempt !== undefined) updated.agent_attempt = lastUpdate.agentAttempt;
             if (lastUpdate.agentMaxRetries !== undefined) updated.agent_max_retries = lastUpdate.agentMaxRetries;
+            // Latch the VNC host port the moment a tester becomes RUNNING
+            // so it survives across later (non-VNC) updates and across
+            // page reloads that re-fetch jobs from the DB.
+            if (lastUpdate.vncHostPort && lastUpdate.vncHostPort > 0) {
+              updated.vnc_host_port = lastUpdate.vncHostPort;
+            }
           }
           if (lastUpdate.retryCount !== undefined) {
             updated.retry_count = lastUpdate.retryCount;

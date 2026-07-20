@@ -1,7 +1,7 @@
 FROM node:20-bookworm
 
 # Upgrade npm
-RUN npm install -g npm@latest
+RUN npm install -g npm@10
 
 # Set root user explicitly
 USER root
@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     python3-venv \
     golang \
     libicu-dev \
+    fuse3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install .NET 10 SDK
@@ -30,7 +31,9 @@ RUN wget https://packages.microsoft.com/config/debian/12/packages-microsoft-prod
 WORKDIR /app
 
 # Install AI CLI tools (provides `kilo acp` for the in-process bridge)
-RUN npm install -g @kilocode/cli \
+# Pinned to 7.3.45: the agent's ACP plan/todo handling (acp-client.ts)
+# depends on this version's session-update behavior.
+RUN npm install -g @kilocode/cli@7.3.45 \
  	&& npm install typescript
 
 # Set global Git configuration
@@ -40,6 +43,11 @@ RUN git config --global user.email "openvelo-agent@openvelo.org" && \
 # Copy package.json and install wrapper dependencies
 COPY package*.json ./
 RUN npm install
+
+# Ship the gbfs binary at /gbfs/gbfs (staged by scripts/stage-gbfs.mjs).
+COPY gbfs-binary /gbfs/gbfs
+RUN chmod +x /gbfs/gbfs \
+    && ln -s /gbfs/gbfs /usr/local/bin/gbfs
 
 # Copy wrapper source and configuration
 COPY . .

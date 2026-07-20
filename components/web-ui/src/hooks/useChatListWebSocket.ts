@@ -8,12 +8,13 @@ interface ChatListEvent {
   stage?: string;
   sub_stage?: string;
   error_type?: string;
+  status?: string;
   chat?: unknown;
   running?: number;
 }
 
 type ChatEventHandlers = {
-  onChatUpdated?: (chatId: number, stage: string, sub_stage: string, error_type?: string, running?: number) => void;
+  onChatUpdated?: (chatId: number, stage: string, sub_stage: string, error_type?: string, running?: number, status?: string) => void;
   onChatCreated?: (chat: unknown) => void;
   onChatDeleted?: (chatId: number) => void;
 };
@@ -52,7 +53,7 @@ export function useChatListWebSocket(
           try {
             const msg = JSON.parse(event.data as string) as ChatListEvent;
             if (msg.type === 'chat_updated' && msg.chatId !== undefined && msg.stage !== undefined && msg.sub_stage !== undefined) {
-              handlersRef.current.onChatUpdated?.(msg.chatId, msg.stage, msg.sub_stage, msg.error_type, msg.running);
+              handlersRef.current.onChatUpdated?.(msg.chatId, msg.stage, msg.sub_stage, msg.error_type, msg.running, msg.status);
             } else if (msg.type === 'chat_created' && msg.chat !== undefined) {
               handlersRef.current.onChatCreated?.(msg.chat);
             } else if (msg.type === 'chat_deleted' && msg.chatId !== undefined) {

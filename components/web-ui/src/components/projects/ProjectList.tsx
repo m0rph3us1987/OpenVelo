@@ -4,34 +4,19 @@ import { Button } from '@/components/ui/button';
 import { ProjectCard } from './ProjectCard';
 import { CreateProjectDialog } from './CreateProjectDialog';
 import { useProjectStatus } from '@/hooks/useProjectStatus';
+import { useProjects } from '@/hooks/useProjects';
 import { useAuth } from '@/context/AuthContext';
 import type { Project } from '@/lib/types';
 
 function ProjectCardWithStatus({ project, onRefresh }: { project: Project; onRefresh: () => void }) {
-  const liveStatus = useProjectStatus(project.id);
+  const { status: liveStatus } = useProjectStatus(project.id);
   return <ProjectCard key={project.id} project={project} onRefresh={onRefresh} liveStatus={liveStatus} />;
 }
 
 export function ProjectList() {
   const { isAdmin } = useAuth();
-  const [projects, setProjects] = React.useState<Project[]>([]);
+  const { projects, refresh: refreshProjects } = useProjects();
   const [createOpen, setCreateOpen] = React.useState(false);
-
-  async function refreshProjects() {
-    try {
-      const res = await fetch('/api/projects');
-      if (res.ok) {
-        const data = (await res.json()) as Project[];
-        setProjects(data);
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  React.useEffect(() => {
-    refreshProjects();
-  }, []);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

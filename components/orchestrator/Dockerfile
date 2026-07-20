@@ -1,25 +1,21 @@
-FROM node:20-bookworm-slim
-
+# Build stage
+FROM golang:alpine AS builder
 WORKDIR /app
 
-# Upgrade npm
-RUN npm install -g npm@latest
+RUN apk add --no-cache git
 
-RUN apt-get update && apt-get install -y \
-    python3 \
-    make \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+COPY go.mod go.sum ./
+RUN go mod download
 
-COPY package*.json ./
-RUN npm ci
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o openvelo-orchestrator main.go
 
-COPY tsconfig.json ./
-COPY src ./src
+# Production stage
+FROM alpine:latest
+WORKDIR /app
 
-# Create kilo config directories
-RUN mkdir -p /root/.local/share/kilo /root/.config/kilo
+RUN apk add --no-cache ca-certificates docker-cli tzdata
 
-ENV NODE_ENV=production
+COPY --from=builder /app/openvelo-orchestrator /app/openvelo-orchestrator
 
-CMD ["node_modules/.bin/tsx", "src/index.ts"]
+ENTRYPOINT ["/app/openvelo-orchestrator"]

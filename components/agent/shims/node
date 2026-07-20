@@ -1,0 +1,21 @@
+#!/bin/bash
+if [[ "$*" == *"dist/index.js"* ]] || [[ "$*" == *"tsx"* ]] || [[ "$*" == *"ts-node"* ]]; then
+    exec /usr/local/bin/node-linux "$@"
+else
+    args=()
+    for arg in "$@"; do
+        if [[ "$arg" =~ ^/ ]]; then
+            win_path=$(winepath -w "$arg" 2>/dev/null || echo "Z:${arg//\//\\}")
+            args+=("$win_path")
+        else
+            args+=("$arg")
+        fi
+    done
+    escaped_args=$(printf "%q " "${args[@]}")
+    # Wine needs a TTY for the Windows Node (plain pipes trigger EBADF console
+    # errors), so run it under script(1). The ACP JSON-RPC stream does NOT flow
+    # through this shim — it uses the dedicated Win32-pipe bridge
+    # (wine-acp-bridge.cjs) — so no special termios handling is needed here.
+    exec script -q -e -c "exec wine Z:\\\\opt\\\\node-win\\\\node.exe $escaped_args" /dev/null
+fi
+

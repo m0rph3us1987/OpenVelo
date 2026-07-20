@@ -4,14 +4,19 @@
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix components/web-ui",
-    "postinstall": "npm install --prefix components/agent && npm install --prefix components/orchestrator && npm install --prefix components/web-ui",
-    "build": "npm run build --prefix components/orchestrator && npm run build --prefix components/web-ui",
+    "postinstall": "npm install --prefix components/web-ui",
+    "build": "npm run build --prefix components/web-ui",
     "production": "npm run start --prefix components/web-ui",
-    "docker-image-linux": "docker build -t openvelo-agent:linux components/agent",
-    "docker-image-linux-no-cache": "docker build --no-cache -t openvelo-agent:linux components/agent",
-    "docker-image-webui-linux": "docker build -t openvelo-webui:linux components/web-ui",
+    "gbfs:stage": "node scripts/stage-gbfs.mjs",
+    "docker-image-linux": "npm run gbfs:stage -- web-ui agent tester && docker build -t openvelo-agent:linux components/agent",
+    "docker-image-linux-no-cache": "npm run gbfs:stage -- web-ui agent tester && docker build --no-cache -t openvelo-agent:linux components/agent",
+    "docker-image-wine": "npm run gbfs:stage -- agent && docker build -f components/agent/Dockerfile.wine -t openvelo-agent:wine components/agent",
+    "docker-image-wine-no-cache": "npm run gbfs:stage -- agent && docker build --no-cache -f components/agent/Dockerfile.wine -t openvelo-agent:wine components/agent",
+    "docker-image-webui-linux": "npm run gbfs:stage -- web-ui && docker build -t openvelo-webui:linux components/web-ui",
     "docker-image-orch-linux": "docker build -t openvelo-orchestrator:linux components/orchestrator",
-    "docker-build-all-linux": "npm run docker-image-linux && npm run docker-image-webui-linux && npm run docker-image-orch-linux",
+    "docker-image-tester-linux": "npm run gbfs:stage -- tester && docker build -t openvelo-tester:linux components/tester",
+    "docker-build-all-linux": "npm run gbfs:stage -- web-ui agent tester && npm run docker-image-linux && npm run docker-image-orch-linux && npm run docker-image-tester-linux && npm run docker-image-webui-linux",
+    "docker-build-all": "npm run gbfs:stage -- web-ui agent tester && npm run docker-image-linux && npm run docker-image-wine && npm run docker-image-orch-linux && npm run docker-image-tester-linux && npm run docker-image-webui-linux",
     "test": "npm run test --prefix components/web-ui"
   }
 }

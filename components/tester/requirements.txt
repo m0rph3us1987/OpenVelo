@@ -1,0 +1,4 @@
+pyautogui>=0.9.54
+python-xlib>=0.33
+python-dotenv>=1.0.1
+mcp>=1.26.0

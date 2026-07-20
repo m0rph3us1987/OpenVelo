@@ -1,0 +1,15 @@
+import { detectDefaultBranchViaRemote, resolveSymbolicHead } from './git-helpers.js';
+
+/**
+ * Resolve the repo's default branch. Tries the symbolic ref
+ * `refs/remotes/origin/HEAD` first (set by `git clone` and refreshed
+ * by `git fetch`); falls back to `git remote show origin | grep
+ * 'HEAD branch'`. Returns null when neither succeeds.
+ */
+export async function resolveDefaultBranch(cwd: string): Promise<string | null> {
+    const symbolic = await resolveSymbolicHead(cwd);
+    if (symbolic && symbolic.startsWith('refs/remotes/origin/')) {
+        return symbolic.slice('refs/remotes/origin/'.length);
+    }
+    return await detectDefaultBranchViaRemote(cwd);
+}

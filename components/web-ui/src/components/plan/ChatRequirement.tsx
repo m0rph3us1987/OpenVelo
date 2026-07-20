@@ -8,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Edit, Send, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface ChatRequirementProps {
   chat: ChatSession;
@@ -136,6 +137,10 @@ export function ChatRequirement({ chat, onHeaderInfo, viewOnly, overrideSubStage
 }
 
 function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boolean }) {
+  const isMobile = useIsMobile();
+  const MobileConfirmDialog = React.lazy(() =>
+    import('@/components/ui/mobile-confirm-dialog').then((m) => ({ default: m.MobileConfirmDialog }))
+  );
   const [isEditing, setIsEditing] = React.useState(false);
   const [content, setContent] = React.useState('');
   const [loading, setLoading] = React.useState(true);
@@ -290,24 +295,38 @@ function RequirementView({ chat, viewOnly }: { chat: ChatSession; viewOnly?: boo
         )}
       </div>
 
-      <Dialog open={showRegenConfirm} onOpenChange={setShowRegenConfirm}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Regenerate requirement</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to regenerate the requirement from scratch? This will delete the current requirement and any generated plans.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setShowRegenConfirm(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={confirmRegenerate}>
-              Regenerate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {isMobile ? (
+        <React.Suspense fallback={null}>
+          <MobileConfirmDialog
+            open={showRegenConfirm}
+            onOpenChange={setShowRegenConfirm}
+            title="Regenerate requirement"
+            description="Are you sure you want to regenerate the requirement from scratch? This will delete the current requirement and any generated plans."
+            confirmLabel="Regenerate"
+            variant="destructive"
+            onConfirm={confirmRegenerate}
+          />
+        </React.Suspense>
+      ) : (
+        <Dialog open={showRegenConfirm} onOpenChange={setShowRegenConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Regenerate requirement</DialogTitle>
+              <DialogDescription>
+                Are you sure you want to regenerate the requirement from scratch? This will delete the current requirement and any generated plans.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="ghost" onClick={() => setShowRegenConfirm(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={confirmRegenerate}>
+                Regenerate
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

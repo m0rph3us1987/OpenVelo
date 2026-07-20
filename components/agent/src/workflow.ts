@@ -1,17 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { CONFIG } from './config.js';
+import { CONFIG, toAgentPath } from './config.js';
 import { messenger } from './messenger.js';
 import { AgentStatus, type Stage } from './agent-status.js';
-import { runCommand } from './shell.js';
+import { runCommand, isWatchMode, stripWatchFlags } from './shell.js';
 import { createAndMergePR as createAdoPR } from './ado.js';
 import { createAndMergePR as createGithubPR } from './github.js';
 import { createAndMergePR as createGiteaPR } from './gitea.js';
 import { createAndMergePR as createBitbucketPR } from './bitbucket.js';
 import { dotnetSetup } from './dotnet.js';
 import { ACPClient, type ACPSession, type ACPResponse } from './acp-client.js';
+import { resetToStaging } from './git-helpers/index.js';
 
 const IS_WINDOWS = CONFIG.AGENT_PLATFORM === 'windows';
+const IS_WINE = CONFIG.AGENT_RUNTIME === 'wine';
 
 /**
  * Kilo ACP mode IDs. The "code" and "plan" names come from the kilocode
@@ -21,6 +23,15 @@ const IS_WINDOWS = CONFIG.AGENT_PLATFORM === 'windows';
  */
 const MODE_CODE = 'code';
 const MODE_PLAN = 'plan';
+
+/**
+ * Hard wall-clock cap (ms) for the agent-run build and test commands.
+ * Matches the 5-minute ceiling advertised to the LLM in prompts/test.txt and
+ * prompts/implementer.txt. `runCommand` SIGKILLs the process when this
+ * elapses, and runs with stdin closed, so an interactive prompt or a
+ * watch/server process can never hang the testing stage.
+ */
+const TEST_CMD_TIMEOUT_MS = 300000;
 
 /**
  * Compute the canonical plan file path for the current job. Stable
@@ -177,7 +188,16 @@ export class WorkflowEngine {
 
             await this.prepareRepository();
 
-            this.client = await ACPClient.init({ cwd: CONFIG.REPO_PATH });
+            console.log(`[engine] tool runtime: ${CONFIG.AGENT_RUNTIME}` +
+                (IS_WINE ? ' (kilo acp runs under Wine using the Windows Node/npm toolchain)' : ' (native)'));
+            this.client = await ACPClient.init({
+                cwd: CONFIG.REPO_PATH,
+                acpCwd: toAgentPath(CONFIG.REPO_PATH),
+                useWineBridge: IS_WINE,
+                turnInactivityTimeoutMs: CONFIG.AGENT_MAX_TIMEOUT > 0
+                    ? CONFIG.AGENT_MAX_TIMEOUT * 1000
+                    : 0,
+            });
 
             messenger.onCheckpoint(async () => {
                 await this.checkpointCommit();
@@ -325,7 +345,7 @@ export class WorkflowEngine {
         console.log('Updating package lists...');
         await runCommand('apt-get', ['update', '-y']);
 
-        const setupShPath = path.join(CONFIG.REPO_PATH, '.openvelo', 'setup.sh');
+        const setupShPath = path.join(CONFIG.REPO_PATH, 'setup.sh');
 
         let buildRetries = 0;
         let buildSuccess = false;
@@ -336,10 +356,7 @@ export class WorkflowEngine {
                 console.log(`Running setup script: ${setupShPath}`);
                 await runCommand('bash', [setupShPath], CONFIG.REPO_PATH);
             } else {
-                const openVeloDir = path.join(CONFIG.REPO_PATH, '.openvelo');
-                if (!fs.existsSync(openVeloDir)) {
-                    fs.mkdirSync(openVeloDir, { recursive: true });
-                }
+                // No openVeloDir creation needed anymore
             }
 
             let buildOutput = '';
@@ -353,12 +370,12 @@ export class WorkflowEngine {
 
             let testOutput = '';
             let testCode = 0;
-            const files = fs.readdirSync(CONFIG.REPO_PATH).filter(f => !['.git', '.gitkeep', '.openvelo'].includes(f));
+            const files = fs.readdirSync(CONFIG.REPO_PATH).filter(f => !['.git', '.gitkeep'].includes(f));
             const isEmpty = files.length === 0;
 
             if (buildCode === 0 && CONFIG.TEST_CMD && !isEmpty && !isEmptyProject) {
                 console.log(`Running test command: ${CONFIG.TEST_CMD}`);
-                const res = await runCommand('bash', ['-c', CONFIG.TEST_CMD], CONFIG.REPO_PATH, 30000);
+                const res = await runCommand('bash', ['-c', CONFIG.TEST_CMD], CONFIG.REPO_PATH, TEST_CMD_TIMEOUT_MS);
                 testCode = res.code ?? 1;
                 testOutput = res.output;
             }
@@ -370,7 +387,8 @@ export class WorkflowEngine {
                     BUILD_OUTPUT: buildOutput.substring(0, 4000),
                     TEST_CMD: CONFIG.TEST_CMD || '(none)',
                     TEST_OUTPUT: testOutput.substring(0, 4000),
-                    SETUP_SH_PATH: setupShPath,
+                    SETUP_SH_PATH: toAgentPath(setupShPath),
+                    VERDICT_PATH: toAgentPath('/tmp/VERDICT'),
                     STORY_TITLE: CONFIG.JOB_TITLE || '(none)',
                     STORY_CONTENT: CONFIG.STORY_CONTENT || '(none)',
                 });
@@ -405,7 +423,7 @@ export class WorkflowEngine {
                     buildSuccess = true;
                 } else if (verdict === 'SETUP_ADJUSTED') {
                     console.log('LLM adjusted setup.sh. Committing changes...');
-                    await runCommand('git', ['add', '.openvelo/setup.sh'], CONFIG.REPO_PATH);
+                    await runCommand('git', ['add', 'setup.sh'], CONFIG.REPO_PATH);
                     await runCommand('git', ['commit', '-m', 'chore: adjust setup.sh for missing dependencies/tools'], CONFIG.REPO_PATH);
                     buildRetries++;
                 } else if (verdict === 'BUILD_ERROR') {
@@ -456,7 +474,7 @@ export class WorkflowEngine {
      * mode-switch the same session to code mode and continue.
      *
      * On the first call, the full planner preamble is prepended so
-     * the LLM has the SKILLS / .openvelo/architecture loading
+     * the LLM has the SKILLS / docs/index.md loading
      * instructions. On retries (sessionId provided + session exists),
      * the preamble is omitted because it's already in the
      * conversation history — only the failure context is sent.
@@ -476,9 +494,11 @@ export class WorkflowEngine {
 
         const planPath = planFilePath();
         const planPromptValues = {
-            REPO_PATH: CONFIG.REPO_PATH,
+            REPO_PATH: toAgentPath(CONFIG.REPO_PATH),
             STORY_CONTENT: planContext,
-            PLAN_PATH: planPath,
+            PLAN_PATH: toAgentPath(planPath),
+            SKILLS_PATH: toAgentPath(this.skillsDir),
+            DATA_PATH: toAgentPath('/data'),
         };
 
         let session: ACPSession;
@@ -531,10 +551,10 @@ export class WorkflowEngine {
      * and switches it to code mode + the implementation model, then
      * asks it to implement the plan it just wrote. The session
      * retains the plan, the SKILLS content, the architecture, and the
-     * implementer notes in its conversation history (the planner
-     * loaded them in the previous turn), so we just send a short
-     * workflow reminder + a pointer to the plan file + the inlined
-     * plan.
+     * story in its conversation history (the planner loaded them in
+     * the previous turn), so we just send a short reminder
+     * (`prompts/implementer.txt`) with a pointer to the plan file —
+     * no plan re-inlining, no duplicated system-prompt text.
      *
      * The planner runs on `BACKEND_BLUEPRINT_MODEL`; the implementer
      * must run on `BACKEND_MODEL` (each stage uses a dedicated model).
@@ -560,21 +580,16 @@ export class WorkflowEngine {
         await session.setModel(CONFIG.BACKEND_MODEL);
         console.log(`[implement] switched session ${session.id} to code mode (model=${CONFIG.BACKEND_MODEL})`);
 
-        const plan = this.readPlan();
         const planPath = planFilePath();
         // The implementer runs in the SAME session as the planner, so
-        // SKILLS, architecture, and implementer-notes content loaded
-        // during the planning turn is already in conversation history.
-        // We just send a short workflow reminder (from
-        // prompts/implementer.txt) + a pointer to the plan file + the
-        // inlined plan. The reminder's {{PLAN_PATH}} placeholder is
-        // rendered via the standard template machinery.
-        const implementPrompt =
-            this.renderPromptTemplate('implementer.txt', { PLAN_PATH: planPath }) +
-            '\n\n' +
-            `The architectural plan is at \`${planPath}\` (you wrote it in the previous turn).\n\n` +
-            'For reference, here it is inlined:\n\n' +
-            '```\n' + plan + '\n```';
+        // SKILLS, architecture, and story loaded during the planning
+        // turn — plus the plan the LLM itself wrote — are already in
+        // conversation history. We just send the (short) implementer
+        // reminder with a {{PLAN_PATH}} pointer so the LLM can
+        // re-read the plan from disk if context compacts.
+        const implementPrompt = this.renderPromptTemplate('implementer.txt', {
+            PLAN_PATH: toAgentPath(planPath),
+        });
         await session.sendMessage(implementPrompt);
         this.currentSession = null;
         return { success: true };
@@ -585,15 +600,39 @@ export class WorkflowEngine {
     // -------------------------------------------------------------------------
 
     /**
-     * Build + test runner. Pure shell + one LLM session (the test
-     * session that writes /tmp/TEST_REPORT.json). The state machine
-     * in `execute()` calls this once per `testing` stage
-     * entry and handles retries on failure.
+     * Build + test runner.
+     *
+     * The authoritative build/test execution is driven by the AGENT (not
+     * the LLM) via `runCommand`, which closes stdin
+     * (`stdio: ['ignore', 'pipe', 'pipe']`) and enforces a hard SIGKILL
+     * timeout (`TEST_CMD_TIMEOUT_MS`). This guarantees a test that waits on
+     * user interaction, runs in watch mode, or spawns a long-running
+     * server can never hang the testing stage — it gets EOF on stdin and
+     * is killed at the timeout. Watch flags are stripped and `CI=true` is
+     * injected before running.
+     *
+     * One LLM session runs first, but only to bring the repository to
+     * "State X" (git clean, restore dependencies). The LLM no longer runs
+     * the long-lived test command and no longer authors the verdict — the
+     * agent computes pass/build_failed/tests_failed directly from exit
+     * codes. The state machine in `execute()` calls this once per `testing`
+     * stage entry and handles retries on failure.
      */
     private async runBuildAndTest(): Promise<BuildTestResult> {
         if (fs.existsSync(this.testReportPath)) fs.unlinkSync(this.testReportPath);
 
         if (!this.client) throw new Error('ACPClient not initialized');
+
+        // Check for any unstaged changes left over from the implementing stage
+        console.log('[test] Checking for unstaged modified/untracked files...');
+        const statusRes = await runCommand('git', ['status', '--porcelain'], CONFIG.REPO_PATH);
+        if (statusRes.code === 0 && statusRes.output.trim() !== '') {
+            console.log(`[test] Found unstaged changes:\n${statusRes.output}`);
+            console.log('[test] Staging all files...');
+            await runCommand('git', ['add', '-A'], CONFIG.REPO_PATH);
+        }
+
+        // ---- Step 1: LLM brings the repo to State X (prep only) ----
         const session = await this.client.createSession({
             model: CONFIG.BACKEND_MODEL,
             mode: MODE_CODE,
@@ -601,36 +640,95 @@ export class WorkflowEngine {
         this.currentSession = session;
 
         const testPrompt = this.renderPromptTemplate('test.txt', {
-            REPO_PATH: CONFIG.REPO_PATH,
+            REPO_PATH: toAgentPath(CONFIG.REPO_PATH),
             BUILD_CMD: CONFIG.BUILD_CMD || '(none)',
             TEST_CMD: CONFIG.TEST_CMD || '(none)',
-            TEST_REPORT_PATH: this.testReportPath,
         });
         await session.sendMessage(testPrompt);
         this.currentSession = null;
 
-        if (!fs.existsSync(this.testReportPath)) {
-            console.error('TEST_REPORT.json not written by tester — treating as fail.');
-            return { success: false, errorLog: 'Test Agent did not produce TEST_REPORT.json output.' };
+        // ---- Step 2: Agent runs the build command (bounded, stdin closed) ----
+        if (CONFIG.BUILD_CMD) {
+            const buildCmd = this.sanitizeRunCommand(CONFIG.BUILD_CMD, 'build');
+            console.log(`Running build command: ${buildCmd}`);
+            const buildRes = await runCommand(
+                'bash',
+                ['-c', `CI=true ${buildCmd}`],
+                CONFIG.REPO_PATH,
+                TEST_CMD_TIMEOUT_MS,
+            );
+            if (buildRes.code !== 0) {
+                const errorLog = buildRes.output.slice(-8000);
+                console.error(`Build failed (verdict: build_failed). Errors:\n${errorLog}`);
+                this.writeTestReport('build_failed', errorLog);
+                return { success: false, errorLog };
+            }
         }
 
-        let testData: any;
+        // ---- Step 3: Agent runs the test command (bounded, stdin closed) ----
+        if (!CONFIG.TEST_CMD) {
+            console.log('No test command configured — treating build success as pass.');
+            this.writeTestReport('pass', '');
+            return { success: true, errorLog: '' };
+        }
+
+        const testCmd = this.sanitizeRunCommand(CONFIG.TEST_CMD, 'test');
+        console.log(`Running test command: ${testCmd}`);
+        const testRes = await runCommand(
+            'bash',
+            ['-c', `CI=true ${testCmd}`],
+            CONFIG.REPO_PATH,
+            TEST_CMD_TIMEOUT_MS,
+        );
+
+        if (testRes.code !== 0) {
+            const errorLog = testRes.output.slice(-8000);
+            console.error(`Tests failed (verdict: tests_failed). Errors:\n${errorLog}`);
+            this.writeTestReport('tests_failed', errorLog);
+            return { success: false, errorLog };
+        }
+
+        console.log('Build and Tests passed!');
+        this.writeTestReport('pass', '');
+        return { success: true, errorLog: '' };
+    }
+
+    /**
+     * Strip watch-mode flags from a build/test command so it runs once and
+     * exits. Logs when a watch flag was removed so the operator can see the
+     * sanitized command that actually ran.
+     */
+    private sanitizeRunCommand(command: string, kind: 'build' | 'test'): string {
+        if (isWatchMode(command)) {
+            const stripped = stripWatchFlags(command);
+            console.warn(
+                `[${kind}] watch-mode flag detected in command; stripping it ` +
+                `so the run terminates.\n  original: ${command}\n  sanitized: ${stripped}`,
+            );
+            return stripped;
+        }
+        return command;
+    }
+
+    /**
+     * Write the agent-computed verdict to TEST_REPORT.json. Kept for
+     * compatibility with anything that inspects the report file; the
+     * authoritative pass/fail signal is the return value of
+     * `runBuildAndTest`.
+     */
+    private writeTestReport(
+        verdict: 'pass' | 'build_failed' | 'tests_failed',
+        errorLog: string,
+    ): void {
         try {
-            testData = JSON.parse(fs.readFileSync(this.testReportPath, 'utf-8'));
+            fs.writeFileSync(
+                this.testReportPath,
+                JSON.stringify({ verdict, error_log: errorLog }, null, 2),
+                'utf-8',
+            );
         } catch (err: any) {
-            console.error('TEST_REPORT.json is not valid JSON — treating as fail.');
-            return { success: false, errorLog: `Test Agent output could not be parsed: ${err.message}` };
+            console.error(`Failed to write TEST_REPORT.json: ${err.message}`);
         }
-
-        const verdict: string = testData.verdict ?? 'tests_failed';
-        const errorLog: string = testData.error_log ?? '';
-        const success = verdict === 'pass';
-        if (success) {
-            console.log('Build and Tests passed!');
-        } else {
-            console.error(`Build/Test failed with verdict: ${verdict}. Errors:\n${errorLog}`);
-        }
-        return { success, errorLog };
     }
 
     // -------------------------------------------------------------------------
@@ -667,9 +765,9 @@ export class WorkflowEngine {
 
         const reviewPrompt = this.renderPromptTemplate('review.txt', {
             STORY_CONTENT: CONFIG.STORY_CONTENT,
-            REPO_PATH: CONFIG.REPO_PATH,
-            SKILLS_PATH: this.skillsDir,
-            REVIEW_PATH: this.reviewPath,
+            REPO_PATH: toAgentPath(CONFIG.REPO_PATH),
+            SKILLS_PATH: toAgentPath(this.skillsDir),
+            REVIEW_PATH: toAgentPath(this.reviewPath),
             STAGING_BRANCH: CONFIG.STAGING_BRANCH,
         });
         await session.sendMessage(reviewPrompt);
@@ -722,8 +820,8 @@ export class WorkflowEngine {
 
         const docPrompt = this.renderPromptTemplate('document.txt', {
             STORY_CONTENT: CONFIG.STORY_CONTENT,
-            REPO_PATH: CONFIG.REPO_PATH,
-            SKILLS_PATH: this.skillsDir,
+            REPO_PATH: toAgentPath(CONFIG.REPO_PATH),
+            SKILLS_PATH: toAgentPath(this.skillsDir),
             CHECKPOINT_BRANCH: this.checkpointBranch,
             STAGING_BRANCH: CONFIG.STAGING_BRANCH,
         });
@@ -731,11 +829,11 @@ export class WorkflowEngine {
         this.currentSession = null;
 
         console.log('Documentation phase complete. Staging documentation changes...');
-        await runCommand('git', ['add', '.openvelo/architecture'], CONFIG.REPO_PATH);
-        const statusRes = await runCommand('git', ['status', '--porcelain', '.openvelo/architecture'], CONFIG.REPO_PATH);
+        await runCommand('git', ['add', 'docs'], CONFIG.REPO_PATH);
+        const statusRes = await runCommand('git', ['status', '--porcelain', 'docs'], CONFIG.REPO_PATH);
 
         if (statusRes.output.trim() !== '') {
-            await runCommand('git', ['commit', '-m', 'docs: update architecture documentation', '--', '.openvelo/architecture'], CONFIG.REPO_PATH);
+            await runCommand('git', ['commit', '-m', 'docs: update documentation to OKF v0.1 format', '--', 'docs'], CONFIG.REPO_PATH);
         }
     }
 
@@ -754,7 +852,7 @@ export class WorkflowEngine {
         const filesToRemove = [
             'opencode.json',
             'kilo.json',
-            path.join('.openvelo', 'implementer-notes.md')
+            'implementer-notes.md'
         ];
         for (const file of filesToRemove) {
             const filePath = path.join(CONFIG.REPO_PATH, file);
@@ -765,16 +863,46 @@ export class WorkflowEngine {
         }
 
         // Unstage/untrack implementer-notes.md explicitly in case it got staged
-        await runCommand('git', ['rm', '--cached', '.openvelo/implementer-notes.md']).catch(() => {});
+        await runCommand('git', ['rm', '--cached', 'implementer-notes.md']).catch(() => {});
 
         this.ensureGitIgnore();
         await runCommand('git', ['add', '.']);
 
-        console.log('Fetching latest staging before push...');
-        await runCommand('git', ['fetch', 'origin', CONFIG.STAGING_BRANCH]);
+        // Resolve the base ref for diff/merge-base/rebase. When the
+        // staging branch has been pushed (origin/<staging> exists), use
+        // it so we rebase onto the latest remote changes. When the
+        // staging branch only exists locally (new repo, single
+        // developer, or pre-push state), fall back to the local ref —
+        // otherwise every `origin/<staging>` call fails with
+        // `fatal: Not a valid object name origin/<staging>` and the
+        // push aborts. See ensureFeatureBranch for the matching fix
+        // on the create side.
+        const { code: originStagingCheck } = await runCommand(
+            'git',
+            ['ls-remote', '--exit-code', '--heads', 'origin', CONFIG.STAGING_BRANCH],
+        );
+        const stagingOnRemote = originStagingCheck === 0;
 
-        let baseCommit = `origin/${CONFIG.STAGING_BRANCH}`;
-        const { output: mbOutput, code: mbCode } = await runCommand('git', ['merge-base', `origin/${CONFIG.STAGING_BRANCH}`, 'HEAD']);
+        console.log('Fetching latest staging before push...');
+        if (stagingOnRemote) {
+            await runCommand('git', ['fetch', 'origin', CONFIG.STAGING_BRANCH]);
+        } else {
+            // Staging is local-only. The PR we are about to create
+            // targets `CONFIG.STAGING_BRANCH` on origin, so the branch
+            // must exist on the remote — push it now so the PR has a
+            // valid base. Skip when there's nothing to push (no commits
+            // ahead of the default branch) and let the API report the
+            // missing base if needed.
+            console.log(`origin/${CONFIG.STAGING_BRANCH} missing — pushing local ${CONFIG.STAGING_BRANCH} to origin as PR base`);
+            const pushResult = await runCommand('git', ['push', '-u', 'origin', CONFIG.STAGING_BRANCH]);
+            if (pushResult.code !== 0) {
+                console.warn(`push -u origin ${CONFIG.STAGING_BRANCH} failed (continuing): ${pushResult.output.split('\n').pop() || 'unknown error'}`);
+            }
+        }
+
+        const baseRef = stagingOnRemote ? `origin/${CONFIG.STAGING_BRANCH}` : CONFIG.STAGING_BRANCH;
+        let baseCommit = baseRef;
+        const { output: mbOutput, code: mbCode } = await runCommand('git', ['merge-base', baseRef, 'HEAD']);
         if (mbCode === 0 && mbOutput.trim()) {
             baseCommit = mbOutput.trim();
         }
@@ -795,20 +923,23 @@ export class WorkflowEngine {
         }
 
         console.log('Rebasing onto latest staging...');
-        const { code: rebaseCode } = await runCommand('git', ['rebase', `origin/${CONFIG.STAGING_BRANCH}`]);
+        const { code: rebaseCode } = await runCommand('git', ['rebase', baseRef]);
         if (rebaseCode !== 0) {
             console.error('Rebase failed with conflicts. Aborting and exiting...');
             await runCommand('git', ['rebase', '--abort']);
             throw new Error('Rebase failed with conflicts. Cannot push broken branch.');
         }
 
-        const { output: postRebaseDiff } = await runCommand('git', ['diff', `origin/${CONFIG.STAGING_BRANCH}..HEAD`, '--name-only']);
+        const { output: postRebaseDiff } = await runCommand('git', ['diff', `${baseRef}..HEAD`, '--name-only']);
         if (!postRebaseDiff.trim()) {
             console.log('All changes on this branch are already present in staging. Skipping push and PR creation.');
             await this.cleanupLocalAndCheckpointBranches();
             return;
         }
 
+        // Always push the feature branch to origin (it will be created
+        // there if missing) — origin/<staging> not existing does not
+        // block the feature-branch push.
         await runCommand('git', ['push', 'origin', this.workBranchName, '--force-with-lease']);
 
         console.log('Creating Pull Request to staging...');
@@ -1002,8 +1133,28 @@ export class WorkflowEngine {
             return;
         }
 
-        console.log(`Starting fresh with new branch ${this.workBranchName}...`);
-        await runCommand('git', ['checkout', '-b', this.workBranchName, `origin/${CONFIG.STAGING_BRANCH}`]);
+        // No checkpoint to resume from. Create the feature branch from
+        // whichever staging ref is actually available — origin/<staging>
+        // when the remote has it, otherwise the local <staging> that the
+        // FUSE mount (or the fallback reset in prepareRepository) just
+        // checked out. Previously this hardcoded origin/<staging>, which
+        // failed with "not a commit" whenever the staging branch had
+        // never been pushed (the agent then silently continued working
+        // on the staging branch instead of a dedicated feature branch).
+        const { code: originStagingCheck } = await runCommand(
+            'git',
+            ['ls-remote', '--exit-code', '--heads', 'origin', CONFIG.STAGING_BRANCH],
+        );
+        const baseRef = originStagingCheck === 0
+            ? `origin/${CONFIG.STAGING_BRANCH}`
+            : CONFIG.STAGING_BRANCH;
+        console.log(`Starting fresh with new branch ${this.workBranchName} from ${baseRef}...`);
+        const result = await runCommand('git', ['checkout', '-b', this.workBranchName, baseRef]);
+        if (result.code !== 0) {
+            throw new Error(
+                `Failed to create feature branch ${this.workBranchName} from ${baseRef}: ${result.output}`,
+            );
+        }
     }
 
     private async checkpointCommit() {
@@ -1022,47 +1173,28 @@ export class WorkflowEngine {
 
     private async prepareRepository() {
         if (!CONFIG.REPO_URL) throw new Error('REPO_URL not provided');
+        if (!CONFIG.STAGING_BRANCH) throw new Error('STAGING_BRANCH not provided');
 
-        const rootDir = IS_WINDOWS ? 'C:\\' : '/';
-        await runCommand('git', ['clone', CONFIG.REPO_URL, CONFIG.REPO_PATH], rootDir);
+        const sharedRepoPath = process.env.SHARED_REPO_PATH || '/shared_repo';
+        const repoPath = CONFIG.REPO_PATH;
 
-        const { code: revParseCode } = await runCommand('git', ['rev-parse', 'HEAD']);
-        if (revParseCode !== 0) {
-            console.log('Repository is empty. Initializing foundational branches...');
+        // Shared package: validates /shared_repo/.git exists, refreshes
+        // tracking refs, spawns gbfs mount, and remote-wins resets /repo.
+        await resetToStaging({
+            sharedRepoPath,
+            repoPath,
+            stagingBranch: CONFIG.STAGING_BRANCH,
+            runCommand,
+        });
 
-            await runCommand('git', ['checkout', '-b', 'main']);
-            if (IS_WINDOWS) {
-                fs.writeFileSync(path.join(CONFIG.REPO_PATH, '.gitkeep'), '', 'utf-8');
-            } else {
-                await runCommand('touch', ['.gitkeep']);
-            }
-            await runCommand('git', ['add', '.gitkeep']);
-            await runCommand('git', ['commit', '-m', 'chore: initial commit']);
-            await runCommand('git', ['push', 'origin', 'main']);
-
-            await runCommand('git', ['checkout', '-b', CONFIG.STAGING_BRANCH]);
-            await runCommand('git', ['push', 'origin', CONFIG.STAGING_BRANCH]);
-
-            await this.ensureFeatureBranch();
-        } else {
-            const { code: stagingLocalCheck } = await runCommand('git', ['rev-parse', '--verify', CONFIG.STAGING_BRANCH]);
-            const { code: stagingRemoteCheck } = await runCommand('git', ['rev-parse', '--verify', `origin/${CONFIG.STAGING_BRANCH}`]);
-
-            if (stagingLocalCheck !== 0 && stagingRemoteCheck !== 0) {
-                console.log(`Staging branch ${CONFIG.STAGING_BRANCH} not found locally or on remote. Creating from HEAD...`);
-                await runCommand('git', ['checkout', '-b', CONFIG.STAGING_BRANCH]);
-                await runCommand('git', ['push', 'origin', CONFIG.STAGING_BRANCH]);
-            } else {
-                console.log(`Checking out staging branch ${CONFIG.STAGING_BRANCH}...`);
-                await runCommand('git', ['checkout', CONFIG.STAGING_BRANCH]);
-                await runCommand('git', ['pull', 'origin', CONFIG.STAGING_BRANCH]);
-            }
-
-            await this.ensureFeatureBranch();
-        }
+        await this.ensureFeatureBranch();
 
         const isWindows = CONFIG.AGENT_PLATFORM === 'windows';
-        const skillsExternalPath = isWindows ? 'C:\\SKILLS' : '/SKILLS';
+        // Paths in kilo.json are read by the kilo engine, so they must be in
+        // the engine's path form: Windows (C:\...) for a native Windows agent
+        // or for the Wine runtime, Linux otherwise.
+        const skillsExternalPath = (isWindows || IS_WINE) ? 'C:\\SKILLS' : '/SKILLS';
+        const tmpExternalPath = IS_WINE ? 'C:\\tmp' : '/tmp';
 
         const kiloConfigPath = path.join(CONFIG.REPO_PATH, 'kilo.json');
         fs.writeFileSync(kiloConfigPath, JSON.stringify({
@@ -1071,9 +1203,19 @@ export class WorkflowEngine {
                 '*': 'allow',
                 'ask_user': 'deny',
                 'question': 'deny',
+                // Deny subagent spawning. The `task` tool launches a nested
+                // subagent session whose work is opaque to the workflow and
+                // produces no agent-visible output for long stretches —
+                // observed to hang the documenting phase (logged as a
+                // pending `other`-kind tool call that never completes). Kilo
+                // surfaces the deny to the LLM as a normal tool rejection, so
+                // it falls back to direct tools (read/grep/glob/edit) and the
+                // phase stays a single, observable session.
+                'task': 'deny',
                 'external_directory': {
-                    '/tmp': 'allow',
-                    '/tmp/**': 'allow',
+                    [tmpExternalPath]: 'allow',
+                    [`${tmpExternalPath}/**`]: 'allow',
+                    [`${tmpExternalPath}\\**`]: 'allow',
                     [skillsExternalPath]: 'allow',
                     [`${skillsExternalPath}/**`]: 'allow',
                     [`${skillsExternalPath}\\**`]: 'allow'
@@ -1121,8 +1263,8 @@ export class WorkflowEngine {
             }
         }
 
-        if (fs.existsSync(path.join(CONFIG.REPO_PATH, '.openvelo', 'implementer-notes.md'))) {
-            patternsToAdd.add('.openvelo/implementer-notes.md');
+        if (fs.existsSync(path.join(CONFIG.REPO_PATH, 'implementer-notes.md'))) {
+            patternsToAdd.add('implementer-notes.md');
         }
 
         const missing: string[] = [];

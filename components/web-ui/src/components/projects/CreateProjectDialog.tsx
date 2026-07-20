@@ -1,4 +1,3 @@
-
 import * as React from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -8,10 +7,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ProjectForm } from './ProjectForm';
-import type { ProjectFormData, Project } from '@/lib/types';
+import type { ProjectFormData } from '@/lib/types';
 import type { Model } from '@/lib/db';
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { INITIAL_VALIDATION_STEPS, runCreateValidation } from '@/lib/project-validation';
 
 interface CreateProjectDialogProps {
   open: boolean;
@@ -28,13 +28,15 @@ interface ValidationStep {
   fieldId?: string;
 }
 
-const INITIAL_STEPS: ValidationStep[] = [
-  { id: 'name', label: 'Project Name Availability', status: 'pending', tab: 'general', fieldId: 'name' },
-  { id: 'port', label: 'Port Availability', status: 'pending', tab: 'general', fieldId: 'port' },
-  { id: 'models', label: 'Model Configuration', status: 'pending', tab: 'models', fieldId: 'default_model' },
-  { id: 'repo', label: 'Repository Connection', status: 'pending', tab: 'repo', fieldId: 'repo_url' },
-  { id: 'docker', label: 'Docker Image', status: 'pending', tab: 'execution', fieldId: 'docker_image' },
-];
+type CreateStepStatus = 'pending' | 'running' | 'success' | 'error';
+
+const INITIAL_STEPS: ValidationStep[] = INITIAL_VALIDATION_STEPS.map((step) => ({
+  id: step.id,
+  label: step.label,
+  status: 'pending',
+  tab: step.tab,
+  fieldId: step.fieldId,
+}));
 
 export function CreateProjectDialog({ open, onOpenChange, onCreated }: CreateProjectDialogProps) {
   const navigate = useNavigate();
@@ -63,75 +65,60 @@ export function CreateProjectDialog({ open, onOpenChange, onCreated }: CreatePro
       .catch(() => {});
   }, [open]);
 
+  function setStepStatus(index: number, status: CreateStepStatus, message?: string) {
+    setValidationSteps((prev) => prev.map((s, idx) =>
+      idx === index ? { ...s, status, message: message ?? s.message } : s
+    ));
+  }
+
+  function findStepIndex(id: string): number {
+    return INITIAL_STEPS.findIndex((s) => s.id === id);
+  }
+
   async function handleSubmit(data: ProjectFormData) {
     setIsSubmitting(true);
     setValidationOpen(true);
-    
-    const steps = [...INITIAL_STEPS];
-    setValidationSteps(steps.map(s => ({ ...s, status: 'pending' })));
+    setValidationSteps(INITIAL_STEPS.map((s) => ({ ...s, status: 'pending' })));
 
     try {
-      for (let i = 0; i < steps.length; i++) {
-        const step = steps[i];
-        
-        // Mark current step as running
-        setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'running' } : s));
-
-        const res = await fetch('/api/projects/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...data, step: step.id }),
-        });
-        
-        const result = await res.json();
-        
-        if (result.success) {
-          setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'success' } : s));
-        } else {
-          setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'error', message: result.message } : s));
-          
+      await runCreateValidation(data, {
+        onStepStatus: (index, status, message) => {
+          if (status === 'skipped') return;
+          setStepStatus(index, status as CreateStepStatus, message);
+        },
+        onValidationFailed: (step) => {
+          const idx = findStepIndex(step.id);
+          if (idx !== -1) setStepStatus(idx, 'error', step.message ?? undefined);
           setFocusFieldOverride(step.fieldId || null);
           setActiveTabOverride(step.tab || null);
-          setTimeout(() => {
-            setValidationOpen(false);
-          }, 2000);
+          setTimeout(() => setValidationOpen(false), 2000);
           setIsSubmitting(false);
-          return;
-        }
-      }
-
-      // If all validations passed, create the project
-      const createRes = await fetch('/api/projects', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-
-      if (createRes.ok) {
-        const project = await createRes.json() as Project;
-        setValidationOpen(false);
-        onOpenChange(false);
-        onCreated();
-        navigate(`/projects/${project.id}`);
-      } else {
-        const errData = await createRes.json();
-        setValidationSteps(prev => [
-          ...prev,
-          { id: 'creation', label: 'Project Creation', status: 'error', message: errData.error || 'Failed to create project' }
-        ]);
-        setTimeout(() => {
+        },
+        onCloneStepStart: () => {
+          // status already set to 'running' by onStepStatus
+        },
+        onCloneStepProgress: (_step, message) => {
+          const idx = findStepIndex('repo_clone');
+          if (idx !== -1) {
+            setValidationSteps((prev) => prev.map((s, i) =>
+              i === idx ? { ...s, message } : s
+            ));
+          }
+        },
+        onComplete: (project) => {
           setValidationOpen(false);
-        }, 3000);
-      }
-    } catch (err) {
-      console.error('Validation/Creation error:', err);
-      setValidationSteps(prev => [
-        ...prev,
-        { id: 'exception', label: 'System Error', status: 'error', message: String(err) }
-      ]);
-      setTimeout(() => {
-        setValidationOpen(false);
-      }, 3000);
+          onOpenChange(false);
+          onCreated();
+          navigate(`/projects/${project.id}`);
+        },
+        onError: (message) => {
+          setValidationSteps((prev) => [
+            ...prev,
+            { id: 'creation', label: 'Project Creation', status: 'error', message },
+          ]);
+          setTimeout(() => setValidationOpen(false), 3000);
+        },
+      });
     } finally {
       setIsSubmitting(false);
     }

@@ -1,0 +1,206 @@
+FROM node:20-bookworm
+
+# Upgrade npm on Linux side
+RUN npm install -g npm@10
+
+# Set root user explicitly
+USER root
+
+# Install system dependencies & build tools
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    wget \
+    build-essential \
+    libicu-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enable i386 architecture and install WineHQ Stable (Wine 11)
+RUN dpkg --add-architecture i386 && \
+    mkdir -pm755 /etc/apt/keyrings && \
+    wget -O /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key && \
+    wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        winehq-stable \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Prefer IPv4 over IPv6 in getaddrinfo (gai.conf) to prevent Wine socket connection bugs
+RUN echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
+
+# Set Wine environment variables
+ENV WINEPREFIX=/root/.wine
+ENV WINEARCH=win64
+ENV WINEDEBUG=-all
+ENV WINEDLLOVERRIDES="mscoree,mshtml="
+ENV XDG_RUNTIME_DIR=/tmp
+
+# Initialize Wine environment, install Wine Mono, and set Windows version to Windows 11
+RUN wineboot -u && \
+    wget -q https://dl.winehq.org/wine/wine-mono/11.0.0/wine-mono-11.0.0-x86.msi -O /tmp/wine-mono.msi && \
+    wine msiexec /i /tmp/wine-mono.msi /qn && \
+    rm /tmp/wine-mono.msi && \
+    winecfg -v win11 && \
+    wineserver -w
+
+# Symlink Wine user configuration/AppData directories to the Linux mountpoints
+RUN mkdir -p /root/.wine/drive_c/users/root/.config && \
+    ln -sf /root/.config/kilo /root/.wine/drive_c/users/root/.config/kilo && \
+    mkdir -p /root/.wine/drive_c/users/root/AppData/Local && \
+    ln -sf /root/.local/share/kilo /root/.wine/drive_c/users/root/AppData/Local/kilo && \
+    mkdir -p /root/.wine/drive_c/users/root/AppData/Roaming && \
+    ln -sf /root/.local/share/kilo /root/.wine/drive_c/users/root/AppData/Roaming/kilo && \
+    mkdir -p /root/.wine/drive_c/users/root/.local/share && \
+    ln -sf /root/.local/share/kilo /root/.wine/drive_c/users/root/.local/share/kilo
+
+# Download and extract Windows Node.js (v20.15.1)
+RUN wget -q https://nodejs.org/dist/v20.15.1/node-v20.15.1-win-x64.zip -O /tmp/node-win.zip && \
+    unzip -q /tmp/node-win.zip -d /opt && \
+    mv /opt/node-v20.15.1-win-x64 /opt/node-win && \
+    rm /tmp/node-win.zip
+
+# Download and extract Windows .NET 10 SDK (10.0.302, LTS)
+RUN wget -q https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.302/dotnet-sdk-10.0.302-win-x64.zip -O /tmp/dotnet-win.zip && \
+    mkdir -p /opt/dotnet-win && \
+    unzip -q /tmp/dotnet-win.zip -d /opt/dotnet-win && \
+    rm /tmp/dotnet-win.zip
+
+# Download and install Windows version of Python (v3.11.9) and extract pip offline
+RUN wget -q https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip -O /tmp/python-win.zip && \
+    mkdir -p /opt/python-win && \
+    unzip -q /tmp/python-win.zip -d /opt/python-win && \
+    rm /tmp/python-win.zip && \
+    sed -i 's/#import site/import site/g' /opt/python-win/python311._pth && \
+    # Install python3-pip on host to download Windows wheels
+    apt-get update && apt-get install -y python3-pip && \
+    mkdir -p /tmp/wheels && \
+    python3 -m pip download \
+        --only-binary=:all: \
+        --platform win_amd64 \
+        --implementation cp \
+        --python-version 3.11 \
+        --dest /tmp/wheels \
+        pip setuptools wheel && \
+    # Extract wheels directly to Wine Python's site-packages using Linux unzip
+    mkdir -p /opt/python-win/Lib/site-packages && \
+    unzip -o -q "/tmp/wheels/*.whl" -d /opt/python-win/Lib/site-packages && \
+    rm -rf /tmp/wheels && \
+    # Clean up host pip
+    apt-get purge -y python3-pip && \
+    apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# Download and extract Windows version of PowerShell (v7.2.21)
+RUN wget -q https://github.com/PowerShell/PowerShell/releases/download/v7.2.21/PowerShell-7.2.21-win-x64.zip -O /tmp/powershell-win.zip && \
+    mkdir -p /opt/powershell-win && \
+    unzip -q /tmp/powershell-win.zip -d /opt/powershell-win && \
+    rm /tmp/powershell-win.zip
+
+# Download and extract Git for Windows (MinGit 2.55.0.3) so the engine has a native
+# Windows git under Wine (the Linux apt git is only used by the wrapper).
+RUN wget -q https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/MinGit-2.55.0.3-64-bit.zip -O /tmp/git-win.zip && \
+    mkdir -p /opt/git-win && \
+    unzip -q /tmp/git-win.zip -d /opt/git-win && \
+    rm /tmp/git-win.zip
+
+# Configure PATH environment variable inside Wine registry
+RUN echo 'Windows Registry Editor Version 5.00' > /tmp/path.reg && \
+    echo '[HKEY_CURRENT_USER\Environment]' >> /tmp/path.reg && \
+    echo '"PATH"="Z:\\\\opt\\\\node-win;Z:\\\\opt\\\\dotnet-win;Z:\\\\opt\\\\git-win\\\\cmd;Z:\\\\opt\\\\git-win\\\\mingw64\\\\bin;Z:\\\\opt\\\\python-win;Z:\\\\opt\\\\python-win\\\\Scripts;Z:\\\\opt\\\\powershell-win;C:\\\\users\\\\root\\\\AppData\\\\Roaming\\\\npm"' >> /tmp/path.reg && \
+    wine regedit /tmp/path.reg && \
+    rm /tmp/path.reg && \
+    wineserver -w
+
+# Configure the Wine git so it does not fight the wrapper's Linux git on the shared
+# /repo == C:\repo tree (no CRLF rewriting; trust the checkout regardless of owner).
+RUN wine cmd /c "git config --global core.autocrlf false & git config --global core.eol lf & git config --global --add safe.directory *" < /dev/null > /dev/null 2>&1; \
+    wineserver -w
+
+# Install @kilocode/cli@7.3.45 globally inside Wine using Windows npm (redirect stdin/stdout/stderr to avoid EBADF console pipe errors in Wine)
+RUN wine Z:\\opt\\node-win\\node.exe Z:\\opt\\node-win\\node_modules\\npm\\bin\\npm-cli.js install -g @kilocode/cli@7.3.45 < /dev/null > /tmp/npm-install.log 2>&1 || (cat /tmp/npm-install.log && exit 1) && \
+    cat /tmp/npm-install.log && \
+    rm /tmp/npm-install.log && \
+    wineserver -w
+
+# Set up work directory for agent wrapper
+WORKDIR /app
+
+# Copy package.json and install wrapper dependencies
+COPY package*.json ./
+RUN npm install
+
+# Copy wrapper source, configuration and shims
+COPY . .
+
+# Compile TypeScript
+RUN npx tsc
+
+# Create data directories
+RUN mkdir /repo /story && chmod 777 /repo /story /root
+RUN mkdir -p /root/.local/share/kilo /root/.config/kilo
+
+# Map the Linux work / bind-mount directories into the Wine C: drive so kilo
+# (running under Wine) sees valid Windows working directories. The real
+# drive_c is preserved (C:\windows, C:\users, kilo AppData keep working); we
+# only add symlinks for the work dirs so that:
+#   C:\repo == /repo, C:\SKILLS == /SKILLS, C:\data == /data,
+#   C:\tmp == /tmp, C:\root == /root
+# The mount points are created first so the symlinks are valid even before the
+# /SKILLS and /data binds are attached at runtime.
+RUN mkdir -p /SKILLS /data && \
+    ln -sfn /repo   /root/.wine/drive_c/repo && \
+    ln -sfn /SKILLS /root/.wine/drive_c/SKILLS && \
+    ln -sfn /data   /root/.wine/drive_c/data && \
+    ln -sfn /tmp    /root/.wine/drive_c/tmp && \
+    ln -sfn /root   /root/.wine/drive_c/root
+
+# Intercept commands with the shims
+RUN mv /usr/local/bin/node /usr/local/bin/node-linux && \
+    cp shims/node /usr/local/bin/node && \
+    cp shims/npm /usr/local/bin/npm && \
+    cp shims/npx /usr/local/bin/npx && \
+    cp shims/dotnet /usr/local/bin/dotnet && \
+    cp shims/kilo /usr/local/bin/kilo && \
+    cp shims/python /usr/local/bin/python && \
+    cp shims/python3 /usr/local/bin/python3 && \
+    cp shims/pip /usr/local/bin/pip && \
+    cp shims/pip3 /usr/local/bin/pip3 && \
+    cp shims/pwsh /usr/local/bin/pwsh && \
+    cp shims/powershell /usr/local/bin/powershell && \
+    cp shims/wine-acp-bridge.cjs /usr/local/bin/wine-acp-bridge.cjs && \
+    chmod +x /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/dotnet /usr/local/bin/kilo /usr/local/bin/python /usr/local/bin/python3 /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pwsh /usr/local/bin/powershell
+
+# Set global Git configuration
+RUN git config --global user.email "openvelo-agent@openvelo.org" && \
+    git config --global user.name "OpenVelo Agent"
+
+# Set Environment Variables
+ENV NODE_ENV=development
+ENV PATH="/app/node_modules/.bin:/usr/local/lib/node_modules/.bin:${PATH}"
+ENV CI=true
+ENV MSBUILDDISABLENODEREUSE=1
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV NODE_SKIP_PLATFORM_CHECK=1
+
+# At runtime, force Wine's builtin mscoree so the .NET 10 CoreCLR can bootstrap
+# IL-only framework assemblies (the build-time "mscoree,mshtml=" disables mscoree
+# to keep wineboot/mono-install non-interactive; .NET 6 tolerated that, .NET 10
+# fails with `mscoree.dll not found` loading System.Runtime.dll). mshtml stays off.
+ENV WINEDLLOVERRIDES="mscoree=b;mshtml="
+
+# Run the tool engine (kilo acp) under Wine using the Windows Node/npm toolchain.
+ENV AGENT_RUNTIME=wine
+
+# Wine ACP transport bridge configuration. kilo.exe (Bun) cannot read a Unix
+# pipe/socket as a Windows std handle under Wine (EBADF), so the wrapper spawns
+# it via wine-acp-bridge.cjs over native Win32 pipes and relays JSON-RPC over a
+# loopback TCP socket. These point the bridge at the Windows Node, the bridge
+# script, and the platform kilo binary (all in Wine Z:\ == / form).
+ENV WINE_NODE_EXE="Z:\\opt\\node-win\\node.exe"
+ENV WINE_ACP_BRIDGE="Z:\\usr\\local\\bin\\wine-acp-bridge.cjs"
+ENV KILO_WINDOWS_EXE="Z:\\opt\\node-win\\node_modules\\@kilocode\\cli\\node_modules\\@kilocode\\cli-windows-x64\\bin\\kilo.exe"
+ENV WINE_ACP_BRIDGE_LOG="C:\\tmp\\wine-acp-bridge.log"
+
+# Define the entrypoint (explicitly using the native node-linux)
+CMD ["node-linux", "dist/index.js"]

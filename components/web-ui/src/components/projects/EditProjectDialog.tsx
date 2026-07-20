@@ -1,8 +1,8 @@
-
 import * as React from 'react';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -11,6 +11,10 @@ import type { Project, ProjectFormData } from '@/lib/types';
 import type { Model } from '@/lib/db';
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  EDIT_VALIDATION_STEPS,
+  runUpdateValidation,
+} from '@/lib/project-validation';
 
 interface EditProjectDialogProps {
   project: Project;
@@ -30,23 +34,12 @@ interface ValidationStep {
   relevantFields?: (keyof ProjectFormData)[];
 }
 
-const VALIDATION_STEPS: ValidationStep[] = [
-  { id: 'name', label: 'Project Name Availability', tab: 'general', fieldId: 'name', relevantFields: ['name'] },
-  { id: 'port', label: 'Port Availability', tab: 'general', fieldId: 'port', relevantFields: ['port'] },
-  { id: 'models', label: 'Model Configuration', tab: 'models', fieldId: 'default_model', relevantFields: ['default_model', 'execution_model', 'analyzer_model', 'chat_model', 'requirement_model', 'planning_model', 'blueprint_model', 'review_model', 'documentation_model'] },
-  { id: 'repo', label: 'Repository Connection', tab: 'repo', fieldId: 'repo_url', relevantFields: ['repo_url', 'repo_pat'] },
-  { id: 'docker', label: 'Docker Image', tab: 'execution', fieldId: 'docker_image', relevantFields: ['docker_image'] },
-];
-
-function hasRelevantFieldsChanged(initial: ProjectFormData, current: ProjectFormData, fields?: (keyof ProjectFormData)[]): boolean {
-  if (!fields) return false;
-  return fields.some(field => String(initial[field]) !== String(current[field]));
-}
-
 export function EditProjectDialog({ project, projectId, open, onOpenChange, onUpdated }: EditProjectDialogProps) {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [validationOpen, setValidationOpen] = React.useState(false);
-  const [validationSteps, setValidationSteps] = React.useState<ValidationStep[]>(VALIDATION_STEPS);
+  const [validationSteps, setValidationSteps] = React.useState<ValidationStep[]>(
+    EDIT_VALIDATION_STEPS.map((s) => ({ ...s }))
+  );
   const [activeTabOverride, setActiveTabOverride] = React.useState<string | null>(null);
   const [focusFieldOverride, setFocusFieldOverride] = React.useState<string | null>(null);
   const [models, setModels] = React.useState<Model[]>([]);
@@ -57,7 +50,7 @@ export function EditProjectDialog({ project, projectId, open, onOpenChange, onUp
       setFreshProject(null);
       setActiveTabOverride(null);
       setFocusFieldOverride(null);
-      setValidationSteps(VALIDATION_STEPS);
+      setValidationSteps(EDIT_VALIDATION_STEPS.map((s) => ({ ...s })));
       return;
     }
     fetch(`/api/projects/${projectId}`)
@@ -70,120 +63,50 @@ export function EditProjectDialog({ project, projectId, open, onOpenChange, onUp
       .catch(() => {});
   }, [open, projectId]);
 
+  function setStepStatus(index: number, status: ValidationStep['status'], message?: string) {
+    setValidationSteps((prev) => prev.map((s, idx) =>
+      idx === index ? { ...s, status, message: message ?? s.message } : s
+    ));
+  }
+
   async function handleSubmit(data: ProjectFormData) {
     setIsSubmitting(true);
     setValidationOpen(true);
 
-    const initialData: ProjectFormData = {
-      password: '',
-      name: project.name,
-      port: project.port,
-      repo_host: project.repo_host || 'github',
-      repo_url: project.repo_url,
-      repo_pat: project.repo_pat || '',
-      docker_image: project.docker_image,
-      backend: project.backend,
-      default_model: project.default_model ?? '',
-      execution_model: project.execution_model ?? '',
-      analyzer_model: project.analyzer_model ?? '',
-      chat_model: project.chat_model ?? '',
-      requirement_model: project.requirement_model ?? '',
-      planning_model: project.planning_model ?? '',
-      blueprint_model: project.blueprint_model ?? '',
-      review_model: project.review_model ?? '',
-      documentation_model: project.documentation_model ?? '',
-      build_cmd: project.build_cmd ?? '',
-      test_cmd: project.test_cmd ?? '',
-      staging_branch: project.staging_branch,
-      poll_interval: project.poll_interval,
-      agent_max_timeout: project.agent_max_timeout,
-      max_parallel_jobs: project.max_parallel_jobs,
-      max_retries: project.max_retries ?? 3,
-      agent_max_retries: project.agent_max_retries ?? 3,
-      remove_deleted_containers: (project.remove_deleted_containers ?? 1) === 1,
-    };
-
-    const stepsToValidate = VALIDATION_STEPS.map(step => ({
-      ...step,
-      status: hasRelevantFieldsChanged(initialData, data, step.relevantFields) ? 'pending' as const : 'skipped' as const,
-    }));
-
-    setValidationSteps(stepsToValidate);
-
-    const pendingSteps = stepsToValidate.filter(s => s.status === 'pending');
-    
-    if (pendingSteps.length === 0) {
-      setValidationOpen(false);
-      try {
-        const updateRes = await fetch(`/api/projects/${project.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
-
-        if (updateRes.ok) {
-          onOpenChange(false);
-          onUpdated();
-        } else {
-          const updateResult = await updateRes.json();
-          console.error('Update failed:', updateResult.error);
-        }
-      } catch (err) {
-        console.error('Update error:', err);
-      } finally {
-        setIsSubmitting(false);
-      }
-      return;
-    }
-
     try {
-      for (let i = 0; i < stepsToValidate.length; i++) {
-        const step = stepsToValidate[i];
-        
-        if (step.status === 'skipped') continue;
-
-        setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'running' } : s));
-
-        const res = await fetch('/api/projects/validate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...data, id: project.id, step: step.id }),
-        });
-        
-        const result = await res.json();
-        
-        if (result.success) {
-          setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'success' } : s));
-        } else {
-          setValidationSteps(prev => prev.map((s, idx) => i === idx ? { ...s, status: 'error', message: result.message } : s));
-          
+      await runUpdateValidation(project, data, {
+        onStepStatus: (index, status, message) => setStepStatus(index, status, message),
+        onValidationFailed: (step) => {
+          const idx = EDIT_VALIDATION_STEPS.findIndex((s) => s.id === step.id);
+          if (idx !== -1) setStepStatus(idx, 'error', step.message ?? undefined);
           setFocusFieldOverride(step.fieldId || null);
           setActiveTabOverride(step.tab || null);
           setIsSubmitting(false);
-          return;
-        }
-      }
-
-      const updateRes = await fetch(`/api/projects/${project.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        },
+        onCloneStepProgress: (_step, message) => {
+          const idx = EDIT_VALIDATION_STEPS.findIndex((s) => s.id === 'repo_clone');
+          if (idx !== -1) {
+            setValidationSteps((prev) => prev.map((s, i) =>
+              i === idx ? { ...s, message } : s
+            ));
+          }
+        },
+        onComplete: () => {
+          setValidationOpen(false);
+          onOpenChange(false);
+          onUpdated();
+        },
+        onError: (message) => {
+          setValidationSteps((prev) => prev.map((s) => ({
+            ...s,
+            status: s.status === 'running' ? 'error' : s.status,
+            message: s.status === 'running' ? message : s.message,
+          })));
+        },
+        onNoChanges: () => {
+          // No validation needed; runUpdateValidation handles the PUT itself.
+        },
       });
-
-      const updateResult = await updateRes.json();
-      if (updateRes.ok) {
-        setValidationOpen(false);
-        onOpenChange(false);
-        onUpdated();
-      } else {
-        setValidationSteps(prev => prev.map(s => ({
-          ...s,
-          status: s.status === 'running' ? 'error' : s.status,
-          message: s.status === 'running' ? (updateResult.error || 'Save failed') : s.message,
-        })));
-      }
-    } catch (err) {
-      console.error('Validation/Update error:', err);
     } finally {
       setIsSubmitting(false);
     }
@@ -195,6 +118,7 @@ export function EditProjectDialog({ project, projectId, open, onOpenChange, onUp
         <DialogContent className="max-w-4xl h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>Edit Project</DialogTitle>
+            <DialogDescription className="sr-only">Edit the configuration of this project.</DialogDescription>
           </DialogHeader>
           <div className="flex-1 overflow-hidden">
             <ProjectForm
@@ -235,7 +159,7 @@ export function EditProjectDialog({ project, projectId, open, onOpenChange, onUp
                 <div className="flex-1 space-y-1">
                   <p className={cn(
                     "text-sm font-medium leading-none",
-                    step.status === 'error' ? "text-destructive" : step.status === 'skipped' ? "text-muted-foreground" : "text-foreground"
+                    step.status === "error" ? "text-destructive" : step.status === "skipped" ? "text-muted-foreground" : "text-foreground"
                   )}>
                     {step.label}
                     {step.status === 'skipped' && <span className="ml-2 text-xs">(unchanged)</span>}

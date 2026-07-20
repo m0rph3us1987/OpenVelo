@@ -1,0 +1,13 @@
+#!/bin/bash
+args=()
+for arg in "$@"; do
+    if [[ "$arg" =~ ^/ ]]; then
+        win_path=$(winepath -w "$arg" 2>/dev/null || echo "Z:${arg//\//\\}")
+        args+=("$win_path")
+    else
+        args+=("$arg")
+    fi
+done
+escaped_args=$(printf "%q " "${args[@]}")
+exec script -q -e -c "wine Z:\\\\opt\\\\powershell-win\\\\pwsh.exe $escaped_args" /dev/null
+

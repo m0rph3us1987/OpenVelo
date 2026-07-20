@@ -247,4 +247,78 @@ describe('runImplement switches model to BACKEND_MODEL after setMode', () => {
             'setModel must be called after setMode(MODE_CODE) in runImplement',
         );
     });
+
+    // Regression: runImplement used to append a fenced block of the
+    // inlined plan to the implementer prompt ("For reference, here it
+    // is inlined:\n\n```\n" + plan + "\n```"). The plan is already in
+    // conversation history from the planning turn (same ACP session),
+    // so re-inlining it is wasted token spend. Lock the contract here.
+    it('does not inline the plan into the implement prompt', () => {
+        assert.ok(
+            !/For reference, here it is inlined/.test(workflowSrc),
+            'runImplement must not inline the plan — the planner turn already wrote it in the same session, so re-injecting it duplicates tokens',
+        );
+        assert.ok(
+            !/```\n' \+ plan \+ '\n```/.test(workflowSrc),
+            'runImplement must not append a fenced plan block to the implement prompt',
+        );
+    });
+
+    it('renders implementer.txt with a {{PLAN_PATH}} pointer', () => {
+        assert.ok(
+            /renderPromptTemplate\('implementer\.txt'/.test(workflowSrc),
+            'runImplement must render prompts/implementer.txt',
+        );
+        assert.ok(
+            /PLAN_PATH:\s*(?:toAgentPath\()?planPath/.test(workflowSrc),
+            'runImplement must pass PLAN_PATH so the template can point at the plan file',
+        );
+    });
+});
+
+// ---------------------------------------------------------------------------
+// prompts/implementer.txt is the implementation-stage prompt template. It
+// must be a short reminder (the plan, SKILLS, architecture, and story are
+// already in conversation history from the planning turn) and must contain
+// a {{PLAN_PATH}} placeholder so the renderer can substitute the path.
+// ---------------------------------------------------------------------------
+
+describe('prompts/implementer.txt', () => {
+    const promptPath = path.join(
+        path.dirname(new URL(import.meta.url).pathname),
+        '..', '..', 'prompts', 'implementer.txt',
+    );
+    const promptSrc = fs.readFileSync(promptPath, 'utf-8');
+
+    it('contains the {{PLAN_PATH}} placeholder', () => {
+        assert.ok(
+            /\{\{PLAN_PATH\}\}/.test(promptSrc),
+            'implementer.txt must contain a {{PLAN_PATH}} placeholder',
+        );
+    });
+
+    it('is a short reminder (no duplicated workflow rule list)', () => {
+        // The old implementer.txt carried a 10-point workflow rule
+        // list that duplicated what planner.txt + SKILLS already
+        // established in the planning turn. Lock the new contract.
+        assert.ok(
+            !/Workflow rules — follow strictly/.test(promptSrc),
+            'implementer.txt must not duplicate the workflow rule list',
+        );
+        assert.ok(
+            !/Foundation first/.test(promptSrc),
+            'implementer.txt must not duplicate Foundation-first rule',
+        );
+        assert.ok(
+            !/Non-Interactive ONLY/.test(promptSrc),
+            'implementer.txt must not duplicate the Non-Interactive rule',
+        );
+    });
+
+    it('keeps the todowrite reminder for the web-UI Live plan panel', () => {
+        assert.ok(
+            /todowrite/.test(promptSrc),
+            'implementer.txt must remind the LLM to populate the todowrite-driven Live plan panel',
+        );
+    });
 });

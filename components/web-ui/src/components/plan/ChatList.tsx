@@ -73,10 +73,19 @@ export function ChatList({ projectId, onChatSelect, onChatDataUpdated, selectedC
   }, [projectId]);
 
   useChatListWebSocket(projectId, {
-    onChatUpdated: (chatId, stage, sub_stage, error_type, running) => {
+    onChatUpdated: (chatId, stage, sub_stage, error_type, running, status) => {
       setChats((prev) => {
         const next = prev.map((chat) =>
-          chat.id === chatId ? { ...chat, stage, sub_stage, error_type, running: running !== undefined ? running : chat.running } : chat
+          chat.id === chatId
+            ? {
+                ...chat,
+                stage,
+                sub_stage,
+                error_type,
+                status: status !== undefined ? status : chat.status,
+                running: running !== undefined ? running : chat.running,
+              }
+            : chat
         );
         const updated = next.find(c => c.id === chatId);
         if (updated && chatId === selectedChatId) {

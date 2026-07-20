@@ -1,6 +1,9 @@
 import { messenger } from './messenger.js';
 import { WorkflowEngine } from './workflow.js';
 import { CONFIG } from './config.js';
+import { assertGbfsInstalled } from './gbfs-check.js';
+
+assertGbfsInstalled('agent');
 
 const _origStdoutWrite = process.stdout.write.bind(process.stdout);
 const _origStderrWrite = process.stderr.write.bind(process.stderr);

@@ -33,11 +33,26 @@ interface MessageResult {
 }
 
 // ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export class WorkflowAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkflowAbortError';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function httpPost(url: string, body: unknown): Promise<{ status: number; data: unknown }> {
+function httpPost(url: string, body: unknown, signal?: AbortSignal): Promise<{ status: number; data: unknown }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new WorkflowAbortError('Aborted before request started'));
+      return;
+    }
     const payload = JSON.stringify(body);
     const parsed = new URL(url);
     const options: http.RequestOptions = {
@@ -49,6 +64,7 @@ function httpPost(url: string, body: unknown): Promise<{ status: number; data: u
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
       },
+      signal,
     };
     const req = http.request(options, (res) => {
       let raw = '';
@@ -67,9 +83,20 @@ function httpPost(url: string, body: unknown): Promise<{ status: number; data: u
       reject(new Error(`Request timed out after 1800s: ${url}`));
     });
     req.on('error', (err) => {
+      if (signal?.aborted) {
+        reject(new WorkflowAbortError(`Aborted: ${url}`));
+        return;
+      }
       console.log(`[httpPost] Connection error to ${url}: ${err.message}`);
       reject(err);
     });
+    if (signal) {
+      const onAbort = () => {
+        try { req.destroy(); } catch { /* ignore */ }
+        reject(new WorkflowAbortError(`Aborted: ${url}`));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
     req.write(payload);
     req.end();
   });
@@ -434,7 +461,7 @@ export class OpenCodeServeClient {
    * @param text       The full turn prompt
    * @param model      Optional "provider/model" string (e.g. "anthropic/claude-3-5-sonnet-20241022")
    */
-  async sendMessage(sessionId: string, text: string, model?: string, skipMainLog = false): Promise<MessageResult> {
+  async sendMessage(sessionId: string, text: string, model?: string, skipMainLog = false, signal?: AbortSignal): Promise<MessageResult> {
     if (!skipMainLog) {
       this.currentActiveSessionId = sessionId;
     }
@@ -460,7 +487,7 @@ export class OpenCodeServeClient {
     }
 
     try {
-      const result = await httpPost(`${this.baseUrl}/session/${sessionId}/message`, body);
+      const result = await httpPost(`${this.baseUrl}/session/${sessionId}/message`, body, signal);
       if (result.status >= 400) {
         throw new Error(`sendMessage HTTP ${result.status}: ${JSON.stringify(result.data)}`);
       }
@@ -468,7 +495,6 @@ export class OpenCodeServeClient {
     } finally {
       if (pollInterval) {
         clearInterval(pollInterval);
-        pollInterval = null;
       }
       if (!skipMainLog) {
         try {
@@ -486,11 +512,25 @@ export class OpenCodeServeClient {
       const url = `${this.baseUrl}/session/${sessionId}/message`;
       const res = await httpGet(url);
       if (res.status !== 200) return '';
-      const messages = res.data as any[];
+      const messages = res.data as unknown[];
       if (!messages || !Array.isArray(messages)) return '';
 
       const logLines: string[] = [];
-      for (const msg of messages) {
+      for (const msgObj of messages) {
+        const msg = msgObj as {
+          info?: { role?: string };
+          parts?: Array<{
+            type?: string;
+            tool?: string;
+            state?: Record<string, unknown>;
+            text?: string;
+            thought?: string;
+            reasoning?: string;
+            content?: string;
+            toolCall?: { functionName: string; args: Record<string, unknown> };
+            toolResponse?: { functionName: string; response: string };
+          }>;
+        };
         if (msg.info?.role === 'assistant' && msg.parts && Array.isArray(msg.parts)) {
           for (const part of msg.parts) {
             if (part.type === 'tool') {

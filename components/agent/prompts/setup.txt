@@ -20,10 +20,10 @@ Your task is to evaluate build or test errors and determine if they are due to m
 {{STORY_CONTENT}}
 ```
 
-## Architecture & Conventions
+## System & User Documentation (OKF v0.1)
 - **Important Pathing Note**: The Agent components use `{{REPO_PATH}}` as the placeholder for the absolute path to the repository.
-- You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists.
-- If it exists, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
+- You MUST use your file reading tool to check if `{{REPO_PATH}}/.openvelo/docs/index.md` exists.
+- If it exists, read it. It contains a catalog of OKF documentation files (architecture reference and user guides). If any file is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions and user expectations.
 
 ## Instructions
 
@@ -45,7 +45,7 @@ If the error is an actual code error or build/test logic error that cannot be fi
 
 ## CRITICAL: How to report your decision
 
-You MUST use your file writing tool to create the file `/tmp/VERDICT` containing EXACTLY one of the following four strings on a single line, with no other text, no analysis, no explanation, no markdown formatting:
+You MUST use your file writing tool to create the file `{{VERDICT_PATH}}` containing EXACTLY one of the following four strings on a single line, with no other text, no analysis, no explanation, no markdown formatting:
 
 ```
 SETUP_OK
@@ -60,4 +60,4 @@ Choose:
 - `BUILD_ERROR` — the failure is an actual code/logic error that cannot be fixed by installing tools or restoring dependencies.
 - `EMPTY_PROJECT` — the repository has no build/config files and the story is about scaffolding.
 
-The file `/tmp/VERDICT` is the ONLY signal the workflow reads. Your assistant response text (or reasoning text) is ignored. If `/tmp/VERDICT` is missing, contains no valid verdict, or contains any extra text, the workflow will fail.
+The file `{{VERDICT_PATH}}` is the ONLY signal the workflow reads. Your assistant response text (or reasoning text) is ignored. If `{{VERDICT_PATH}}` is missing, contains no valid verdict, or contains any extra text, the workflow will fail.

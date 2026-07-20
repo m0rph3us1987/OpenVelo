@@ -1,0 +1,29 @@
+Changelog
+=========
+
+2026-07-20:
+### Major Changes
+- **Orchestrator Rewrite:** The Orchestrator component has been completely rewritten from Node.js/TypeScript to Go for improved performance and concurrency.
+- **Docker Networking:** Introduced a shared `openvelo` Docker bridge network. All OpenVelo components (web-ui, tester, dynamically-spawned orchestrator, and agent containers) now share this network to communicate with each other by container name.
+- **New Components:**
+  - `tester`: A new component for test execution.
+  - `gbfs`: A new Git Backed File System component.
+  - `git-helpers`: Git utility scripts extracted into a dedicated component.
+
+### Web UI
+- **Mobile Support:** Added responsive hooks (`useIsMobile`) and mobile-specific components (e.g., sheets and dialogs) for a better experience on mobile devices.
+- **VNC Viewer:** Introduced a new VNC Viewer page (`VncViewerPage.tsx`) for remote desktop interactions.
+- **Planning Enhancements:** Added new planning stages for testing, including test discovery and test generation prompts.
+- **Parallel Log Viewer:** Added `ParallelLogViewer.tsx` to the dashboard to stream stdout/stderr from multiple in-flight jobs simultaneously.
+- **Resilience:** Implemented database self-healing mechanisms and repository clone fallback logic.
+- **FUSE Privileges:** The Web UI container now requires FUSE privileges (`/dev/fuse`, `SYS_ADMIN`) to support the new GBFS mounts.
+
+### Agent
+- **Wine Support:** Added `Dockerfile.wine` for running Windows executables via Wine inside the agent container.
+- **Shims & Tools:** Introduced new shims and git-helper integrations.
+- **Testing Enhancements:** Added new smoke tests and unit test improvements.
+- **LLM Prompts:** Improved and adjusted agent system prompts (planner, test, implementer, review, document).
+
+### Documentation & Maintenance
+- **Documentation Restructure:** Architecture and component documentation has been moved from the `.openvelo/` directory to the `docs/` directory.
+- **Scripts:** General restructuring of setup and rebuild scripts (`setup.sh`, `rebuild.sh`, and `scripts/` directory).

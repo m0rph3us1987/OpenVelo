@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { getChatSession, getProject, getChatDir, getChatMessages, getProjectModels, deleteDomainsByChatId, insertDomain, insertDomainQuestion } from '@/lib/db';
 import { serveRegistry } from '@/lib/opencode-serve-registry';
-import { transitionTo } from './index';
+import { WorkflowAbortError } from '@/lib/opencode-serve-client';
+import { transitionTo, getWorkflowSignal } from './index';
 import { stageWsManager } from '@/lib/stage-ws-manager';
 import { getSkillsDir } from '@/lib/skills';
 
@@ -29,6 +30,12 @@ export async function handleDomain(chatId: number): Promise<void> {
     return;
   }
 
+  const signal = getWorkflowSignal(chatId);
+  if (signal?.aborted) {
+    console.log(`[workflow:domain] Aborted before start`);
+    return;
+  }
+
   if (chat.sub_stage === 'plan') {
     await handlePlan(chatId);
     return;
@@ -45,6 +52,12 @@ async function handlePlan(chatId: number): Promise<void> {
   const chat = getChatSession(chatId);
   if (!chat) {
     console.log(`[workflow:domain:plan] Chat ${chatId} not found`);
+    return;
+  }
+
+  const signal = getWorkflowSignal(chatId);
+  if (signal?.aborted) {
+    console.log(`[workflow:domain:plan] Aborted before start`);
     return;
   }
 
@@ -110,7 +123,7 @@ async function handlePlan(chatId: number): Promise<void> {
   console.log(`[workflow:domain:plan] Sending prompt to LLM`);
 
   try {
-    await client.sendMessage(sessionId, prompt, models.chat_model);
+    await client.sendMessage(sessionId, prompt, models.chat_model, false, signal);
 
     const domainPlanPath = path.join(chatDir, 'domain_plan.json');
 
@@ -163,6 +176,10 @@ async function handlePlan(chatId: number): Promise<void> {
     transitionTo(chatId, 'domain', 'quiz');
     stageWsManager.broadcastToStage(chatId, 'domain', { type: 'sub_stage', sub_stage: 'quiz' });
   } catch (err) {
+    if (err instanceof WorkflowAbortError || signal?.aborted) {
+      console.log(`[workflow:domain:plan] Aborted`);
+      return;
+    }
     console.log(`[workflow:domain:plan] sendMessage failed: ${err}`);
     const currentChat = getChatSession(chatId);
     if (currentChat && !currentChat.running) {

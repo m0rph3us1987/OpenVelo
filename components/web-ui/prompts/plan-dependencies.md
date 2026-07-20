@@ -9,7 +9,7 @@ SKILLS DIRECTORY: {SKILLS_DIR}
 You MUST read `{SKILLS_DIR}/INDEX.md` which contains a list of available skill categories. If a category is relevant to the tech stack, you MUST use your file reading tool to open its linked `_INDEX.md` file. Inside that `_INDEX.md`, evaluate the specific skills, and you MUST read the `SKILL.md` file for any matched skills and factor their rules into your output. Do not guess the rules based on names.
 
 ARCHITECTURE:
-You MUST use your file reading tool to check if `{REPO_DIR}/.openvelo/architecture/_INDEX.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
+You MUST use your file reading tool to check if `{REPO_DIR}/docs/index.md` exists. If it does, read it. It contains a table of architectural domains for this specific project. If any domain is relevant to your task, use your file reading tool to read the linked markdown file to ensure you follow the established conventions.
 
 The implementing agent will follow these skills and architectural rules — your output must be compatible.
 
@@ -51,6 +51,9 @@ Identify dependencies for the current feature's stories:
 
 ### ABSOLUTE CONSTRAINT — POSITIONAL ORDERING
 Stories are indexed 0, 1, 2, … in the array above. A story at index `i` may ONLY depend on stories at index `j` where `j < i`. You MUST NEVER add a dependency that points forward or to itself. 
+
+### Note on the implementation ↔ test chain
+The `plan-jobs-discovery` prompt emits a flat ordered `jobs` array (each implementation job immediately followed by its paired test job) without any `depends_on` field. The web-ui's `POST /api/projects/:id/create-jobs-from-stories` route performs the structural re-wire after the fact — it inserts all rows in the order the LLM emitted them, then for each row sets `depends_on` purely from its position and `type`: the first implementation job gets `depends_on = []`; each subsequent implementation gets `depends_on = [previous test]`; each test job gets `depends_on = [its implementation pair]`. The LLM does not need to (and must not) compute or emit these edges — the chain `I → T → I → T → …` is produced by the route. Do not introduce `depends_on` in this prompt's output.
 
 ---
 

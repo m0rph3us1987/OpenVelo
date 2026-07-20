@@ -114,6 +114,27 @@ describe('Header', () => {
     assert.ok(container.innerHTML.includes('alice'));
   });
 
+  it('profile dropdown is hidden when security is disabled', async () => {
+    global.fetch = async (url: unknown) => {
+      if (String(url) === '/api/auth/me') {
+        return Response.json({ user: { id: 3, username: 'carol', role: 'admin' } });
+      }
+      if (String(url) === '/api/settings') {
+        return Response.json({ securityEnabled: false });
+      }
+      if (String(url) === '/api/themes') {
+        return Response.json([]);
+      }
+      if (String(url) === '/api/themes/dark') {
+        return Response.json({ colors: {} });
+      }
+      return Response.json({});
+    };
+    const { container } = render(TestWrapper({ children: React.createElement(Header) }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    assert.ok(!container.innerHTML.includes('carol'), 'username must NOT render when security is disabled');
+  });
+
   it('dropdown contains Change Password and Log out', async () => {
     global.fetch = async (url: unknown) => {
       if (String(url) === '/api/auth/me') {

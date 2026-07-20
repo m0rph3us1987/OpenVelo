@@ -57,17 +57,17 @@ only, not a replacement for the verdict file.
 - First, read the Job Description and requirements provided at the bottom of this message.
 - Run `git diff origin/{{STAGING_BRANCH}}...HEAD` to identify all modified, added, and deleted files. You MUST examine the actual code changes to perform the review.
 
-### Step 2 — Consult Architecture Docs (As-Needed)
-- Check if `{{REPO_PATH}}/.openvelo/architecture/_INDEX.md` exists using your file reading tool.
-- If it does, read it. Based on the files modified in the diff, ONLY open and read the linked domain architecture markdown files that are directly relevant to your review. Do NOT read unrelated architecture documents. Evaluate if the implementation deviated from these architectural rules. If it did, check `{{REPO_PATH}}/.openvelo/implementer-notes.md`. Do not blindly fail an architecture deviation if the implementer provided a valid, documented technical justification.
+### Step 2 — Consult System & User Docs (As-Needed)
+- Check if `{{REPO_PATH}}/.openvelo/docs/index.md` exists using your file reading tool.
+- If it does, read it. Based on the files modified in the diff, ONLY open and read the linked domain OKF documentation files (architecture or user guides) that are directly relevant to your review. Do NOT read unrelated documents. Evaluate if the implementation deviated from these rules. If it did, check `{{REPO_PATH}}/.openvelo/implementer-notes.md`. Do not blindly fail a deviation if the implementer provided a valid, documented technical justification.
 
 ### Step 3 — Consult Skills Directory (As-Needed)
-- Read the absolute path "/SKILLS/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
+- Read the absolute path "{{SKILLS_PATH}}/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
 - Evaluate which skill categories are relevant to the tech stack and layers modified in the diff.
 - Only open the linked `_INDEX.md` and read specific `SKILL.md` files for those relevant skills. Do NOT load skills unrelated to the current task.
 
 ### Step 4 — Verify Acceptance Criteria
-First, read `/repo/.openvelo/implementer-notes.md` (if it exists). Look for any `## Deviation:` entries — these document criteria the implementer intentionally deviated from with a technical justification.
+First, read `{{REPO_PATH}}/.openvelo/implementer-notes.md` (if it exists). Look for any `## Deviation:` entries — these document criteria the implementer intentionally deviated from with a technical justification.
 
 Go through each requirement in the Job description one by one. For each requirement:
 - Locate the code in the diff (or in the repo if needed) that satisfies it
@@ -97,7 +97,7 @@ Write the JSON verdict to `{{REVIEW_PATH}}`.
 6. **Do NOT run build or tests**: You are strictly forbidden from running build or test commands (e.g., `dotnet build`, `npm test`, `make`, `pytest`). Build and test verification has already been performed in a prior stage. Rely exclusively on `git diff`, reading source files, and the acceptance criteria.
 7. **Delta Focus**: The implementation is only accountable for the areas it touched. Don't hold it responsible for the entire repo's health.
 8. **Ignore Missing Tests**: Do NOT reject or fail the implementation if tests are missing, incomplete, or if no new tests were generated. Missing tests are not a reason for rejection.
-9. **Accept Documented Deviations**: If the implementer wrote a `## Deviation:` note in `/repo/.openvelo/implementer-notes.md` explaining why a criterion cannot be met as written, and the reason is technically valid (not laziness), treat that criterion as satisfied. Only reject deviations that are clearly lazy, would break core functionality, or have no technical justification.
+9. **Accept Documented Deviations**: If the implementer wrote a `## Deviation:` note in `{{REPO_PATH}}/.openvelo/implementer-notes.md` explaining why a criterion cannot be met as written, and the reason is technically valid (not laziness), treat that criterion as satisfied. Only reject deviations that are clearly lazy, would break core functionality, or have no technical justification.
 10. **Pragmatic Security Mocking in Tests**: Accept tests that mock, bypass, or simplify security layers (e.g., bypassing CSRF, mocking session handlers, stubbing out authentication/authorization middleware). Unless the Job is specifically about building or verifying security enforcement itself, do NOT fail the review because the implementer bypassed or mocked security configurations in its unit or integration tests. Functional tests should focus strictly on the core business logic of the feature being built.
 
 ---

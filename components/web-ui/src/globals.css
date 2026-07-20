@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @source not "../data/**";
 @plugin "@tailwindcss/typography";
+@plugin "./styles/tailwind-mobile-plugin";
 
 :root {
   --color-background: #f6f7f8;
@@ -60,4 +61,90 @@ body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+
+@layer utilities {
+  .tap-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .tap-target-lg {
+    min-width: 48px;
+    min-height: 48px;
+  }
+  .pt-safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pb-safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@keyframes mobile-drawer-in {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes mobile-drawer-out {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+}
+
+@keyframes mobile-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes mobile-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-mobile-drawer-in {
+  animation: mobile-drawer-in 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-mobile-drawer-out {
+  animation: mobile-drawer-out 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-mobile-scrim-in {
+  animation: mobile-scrim-in 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.animate-mobile-scrim-out {
+  animation: mobile-scrim-out 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-mobile-drawer-in,
+  .animate-mobile-drawer-out,
+  .animate-mobile-scrim-in,
+  .animate-mobile-scrim-out {
+    animation-duration: 1ms;
+  }
 }

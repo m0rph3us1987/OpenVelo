@@ -1,4 +1,4 @@
-import { getChatSession, updateChatSession } from '@/lib/db';
+import { getChatSession, getProject, updateChatSession } from '@/lib/db';
 import { wsManager } from '@/lib/websocket-manager';
 import { stageWsManager } from '@/lib/stage-ws-manager';
 import { handleInit } from './stage-init';
@@ -9,8 +9,37 @@ import { handleFinalAssessment } from './stage-final-assessment';
 import { handleRequirement } from './stage-requirement';
 import { handlePlan } from './stage-plan';
 import { handleVerify } from './stage-verify';
+import { setupChatMount, isChatMountActive } from '@/lib/repo-clone';
 
 type WorkflowHandler = (chatId: number) => void;
+
+interface WorkflowRun {
+  controller: AbortController;
+  done: Promise<void>;
+}
+
+const workflowRuns = new Map<number, WorkflowRun>();
+
+export function getWorkflowSignal(chatId: number): AbortSignal | undefined {
+  return workflowRuns.get(chatId)?.controller.signal;
+}
+
+export function isWorkflowRunning(chatId: number): boolean {
+  return workflowRuns.has(chatId);
+}
+
+export async function prepareChatForWorkflow(chatId: number): Promise<void> {
+  const chat = getChatSession(chatId);
+  if (!chat) throw new Error(`chat ${chatId} not found`);
+  const project = getProject(chat.project_id);
+  if (!project) throw new Error(`project ${chat.project_id} not found`);
+  if (!project.repo_url) throw new Error(`project ${project.id} has no repo_url`);
+  if (await isChatMountActive(chatId)) {
+    console.log(`[workflow] Chat ${chatId} mount already active — skipping git setup`);
+    return;
+  }
+  await setupChatMount(chatId, project);
+}
 
 export function getHandler(stage: string, subStage: string): WorkflowHandler | null {
   if (stage === 'init' && subStage === '') return handleInit;
@@ -31,7 +60,7 @@ export function getHandler(stage: string, subStage: string): WorkflowHandler | n
   return null;
 }
 
-export function runWorkflow(chatId: number): void {
+export async function runWorkflow(chatId: number): Promise<void> {
   const chat = getChatSession(chatId);
   if (!chat) {
     console.log(`[workflow] Chat ${chatId} not found`);
@@ -40,6 +69,13 @@ export function runWorkflow(chatId: number): void {
 
   if (chat.running) {
     console.log(`[workflow] Chat ${chatId} is already running - skipping`);
+    return;
+  }
+
+  try {
+    await prepareChatForWorkflow(chatId);
+  } catch (err) {
+    console.error(`[workflow] prepareChatForWorkflow failed for chat ${chatId}:`, err);
     return;
   }
 
@@ -69,9 +105,44 @@ export function runWorkflow(chatId: number): void {
     return;
   }
 
-  setImmediate(() => {
-    handler(chatId);
+  const controller = new AbortController();
+  const done = new Promise<void>((resolve) => {
+    setImmediate(async () => {
+      try {
+        await handler(chatId);
+      } finally {
+        resolve();
+      }
+    });
   });
+  done.finally(() => {
+    if (workflowRuns.get(chatId)?.controller === controller) {
+      workflowRuns.delete(chatId);
+    }
+  });
+  workflowRuns.set(chatId, { controller, done });
+}
+
+/**
+ * Cancel the in-flight workflow for a chat, if any. Resolves once the
+ * underlying stage handler chain has settled (or times out).
+ */
+export async function cancelWorkflow(chatId: number, timeoutMs = 5000): Promise<{ cancelled: boolean }> {
+  const run = workflowRuns.get(chatId);
+  if (!run) {
+    return { cancelled: false };
+  }
+  try {
+    run.controller.abort();
+  } catch { /* ignore */ }
+  await Promise.race([
+    run.done,
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+  if (workflowRuns.get(chatId)?.controller === run.controller) {
+    workflowRuns.delete(chatId);
+  }
+  return { cancelled: true };
 }
 
 export interface TransitionOptions {
