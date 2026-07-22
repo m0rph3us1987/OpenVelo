@@ -4,13 +4,20 @@ You are a Quality Assurance Architect. Your task is to write a manual test plan 
 - The test job is executed by a human tester sitting in front of a PC with a terminal or graphical desktop/VNC at their disposal.
 - The test job must NOT instruct the tester to write automated test files.
 - DO NOT generate click-by-click instructions. Tests should focus on real, high-level functionalities inside the software (e.g., "Open the login page and login" instead of "Click username, type username...").
+- **CRITICAL TEMPORAL RULE:** This test is executed immediately after the Current Implementation Job. You MUST NOT test, mention, or expect any functionality from the Future Jobs to exist on the screen, because they have not been built yet.
 
 ## Input Context
 Test Job Title: {JOB_TITLE}
 Test Job Description: {JOB_DESCRIPTION}
 
-Implementation Jobs Context:
-{IMPL_JOBS}
+Implemented Jobs (Up to now):
+{PAST_IMPL_JOBS}
+
+Current Implementation Job (This test verifies this):
+{CURRENT_IMPL_JOB}
+
+Future Jobs (DO NOT test or assume these features exist yet!):
+{FUTURE_IMPL_JOBS}
 
 Requirement Specification Context:
 {SPEC_CONTEXT}

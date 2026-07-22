@@ -726,7 +726,7 @@ async function handleTest(chatId: number, chatDir: string, repoDir: string, proj
         });
         updatePlanJobStatus(testJobId, 'pending');
         updatePlanJobLogs(testJobId, 'Pending evaluation...\n');
-        pendingTestJobs.push({ id: testJobId, title: jobDef.title, description: jobDef.description, index: newIndex });
+        pendingTestJobs.push({ id: testJobId, title: jobDef.title, description: jobDef.description, index: newIndex, implements_job_id: jobDef.implements_job_id });
       }
     }
 
@@ -741,8 +741,6 @@ async function handleTest(chatId: number, chatDir: string, repoDir: string, proj
         path.join(process.cwd(), 'prompts', 'plan-test-generation.md'),
         'utf-8'
       );
-
-      const implJobsContext = JSON.stringify(implJobs.map(j => ({ title: j.title, description: j.description })));
 
       await runWithLimit(4, pendingTestJobs.map((job, i) => ({ job, i })), async ({ job, i }) => {
         if (signal?.aborted) {
@@ -762,10 +760,30 @@ async function handleTest(chatId: number, chatDir: string, repoDir: string, proj
           progress: progressMsg,
         });
 
+        const pastImplJobs = [];
+        const futureImplJobs = [];
+        let currentImplJob = null;
+        let foundCurrent = false;
+
+        for (const ij of implJobs) {
+          if (foundCurrent) {
+            futureImplJobs.push({ title: ij.title, description: ij.description });
+          } else {
+            if (ij.id === job.implements_job_id) {
+              currentImplJob = { title: ij.title, description: ij.description };
+              foundCurrent = true;
+            } else {
+              pastImplJobs.push({ title: ij.title, description: ij.description });
+            }
+          }
+        }
+
         const prompt = generationPromptTemplate
           .replace(/{JOB_TITLE}/g, job.title)
           .replace(/{JOB_DESCRIPTION}/g, job.description)
-          .replace(/{IMPL_JOBS}/g, implJobsContext)
+          .replace(/{CURRENT_IMPL_JOB}/g, JSON.stringify(currentImplJob))
+          .replace(/{PAST_IMPL_JOBS}/g, JSON.stringify(pastImplJobs))
+          .replace(/{FUTURE_IMPL_JOBS}/g, JSON.stringify(futureImplJobs))
           .replace(/{SPEC_CONTEXT}/g, specContext);
 
         const sessionId = await client.createSession();
