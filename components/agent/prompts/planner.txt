@@ -16,7 +16,7 @@ Before designing any new changes, check if the requested Job is already fully im
 1. **Analyze the Job & Goal**:
    - First, read the Job Description and requirements provided at the bottom of this message. Identify the target files, components, and layers (e.g. database schema, API routes, UI screens) that need to be created or modified.
 2. **Consult System & User Docs (As-Needed)**:
-   - Check if `{{REPO_PATH}}/.openvelo/docs/index.md` exists using your file reading tool.
+   - Check if `{{REPO_PATH}}/docs/index.md` exists using your file reading tool.
    - If it does, read it. Based on the components identified in Step 1, ONLY open and read the linked domain OKF documentation files (architecture or user guides) that are directly relevant to your task. Do NOT read unrelated documents.
 3. **Consult Skills Directory (As-Needed)**:
    - Read the absolute path "{{SKILLS_PATH}}/INDEX.md" using your file reading tool (Note: this is mounted at the root of the container, OUTSIDE the repository).
@@ -25,7 +25,7 @@ Before designing any new changes, check if the requested Job is already fully im
 4. **Explore & Find (Trace Flow)**:
    - Trace the data flow and identify integration patterns (e.g. API definitions, ORM details, test file structure) in the repository.
    - Use the architecture and skills you loaded to guide your search. Avoid broad recursive scans.
-5. **Identify Required Tools & Dependencies**: Check what system tools, libraries, or dependencies will be needed for the project to run. Include them in your plan so the implementer knows to install them and update `.openvelo/setup.sh` accordingly.
+5. **Identify Required Tools & Dependencies**: Check what system tools, libraries, or dependencies will be needed for the project to run. Include them in your plan so the implementer knows to install them and update `setup.sh` accordingly.
 6. **Draft the Plan**: Save your findings and proposed architectural changes as a Markdown file at the exact path `{{PLAN_PATH}}`.
    - **CRITICAL WARNING:** You MUST write the plan file to the exact path specified by `{{PLAN_PATH}}`. DO NOT write the plan to `/root/.local/share/kilo/plans/` or any other directory. Writing the plan to any path other than `{{PLAN_PATH}}` will prevent the workflow engine from finding it and will cause the entire process to fail.
    - This path `{{PLAN_PATH}}` is pre-created and writable for you. If the file already exists from a previous attempt, overwrite it with the updated plan. Always use the same path across attempts.

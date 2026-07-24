@@ -52,6 +52,9 @@ RUN chmod +x /gbfs/gbfs \
 # Copy wrapper source and configuration
 COPY . .
 
+# Setup MCP helper scripts
+RUN cp mcp/run.sh /usr/local/bin/run.sh && chmod 755 /usr/local/bin/run.sh /app/mcp/run.sh /app/mcp/stop.sh
+
 # Compile TypeScript
 RUN npx tsc
 

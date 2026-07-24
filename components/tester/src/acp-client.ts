@@ -97,6 +97,8 @@ export interface ACPSessionConfig {
      * HTTP/SSE endpoint ({name, url, type, headers}).
      */
     mcpServers?: Array<Record<string, unknown>>;
+    /** Optional existing session ID to reopen/resume. */
+    sessionId?: string;
 }
 
 export interface ACPToolCall {
@@ -578,6 +580,7 @@ export class ACPClient {
         const result = await this.rpc.sendRequest<SessionNewResult>('session/new', {
             cwd: this.cwd,
             mcpServers: config.mcpServers ?? [],
+            sessionId: config.sessionId,
         });
         const sessionId = result.sessionId;
 

@@ -328,6 +328,7 @@ OpenVelo has two levels of retry:
 
 - **Container retries** (`max_retries`, default 3): If an agent container fails or times out, the orchestrator re-spawns it. The new container receives the error history from previous attempts so it can avoid repeating the same mistakes.
 - **Agent build retries** (`agent_max_retries`, default 3): Inside each container, the agent loops through blueprinting → implementing → testing → reviewing until the review passes. Any test or review failure loops back to blueprinting (re-planning) with the failure context, incrementing the retry counter. The plan+implement session is kept alive across retries to retain conversation history.
+- **ACP Resilience:** If the underlying `kilo acp` process crashes or the orchestrator disconnects during execution, the workflow engine automatically restarts the process and retries the current operation, ensuring smooth recovery from transient AI or network issues.
 
 The **agent timeout** (`agent_max_timeout`, default 30 minutes) is an inactivity watchdog — it resets on every log line from the agent. If no output is produced for the configured duration, the container is stopped, a checkpoint commit is made, and a retry is triggered.
 
@@ -457,6 +458,7 @@ A dedicated test runner component that operates on the shared `openvelo` Docker 
 - During the planning phase, you can choose to automatically generate **test jobs** alongside your implementation jobs.
 - If a test job fails during any of its tasks, the system automatically generates an **implementation job for self-healing** to diagnose and fix the issue.
 - Once the self-healing job completes, the next test iteration will resume the original plan from the last failed test. This continuous testing and fixing loop ensures features are robust before completion.
+- **Playwright MCP Support:** Includes built-in Playwright integration via the Model Context Protocol (MCP) to allow agents to perform robust end-to-end browser testing in a headless environment.
 
 ### GBFS (Git Backed File System)
 

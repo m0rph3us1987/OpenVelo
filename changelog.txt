@@ -1,6 +1,14 @@
 Changelog
 =========
 
+2026-07-24:
+### Enhancements & Fixes
+- **Playwright Integration:** Added Playwright MCP support (with `chromium-wrapper.sh` and `playwright-mcp.js`) for the tester component.
+- **MCP Lifecycle Management:** Introduced `run.sh` and `stop.sh` scripts in both the agent and tester components to manage Model Context Protocol (MCP) servers.
+- **Resilience:** Added automatic retry loops in agent and tester workflows to recover gracefully from Kilo ACP process crashes and orchestrator disconnections.
+- **Prompts:** Refined AI system prompts across multiple phases (planner, implementer, review, document, setup, test plan, and test system).
+- **Orchestrator Improvements:** Updated WebSocket connection handling (`conn.go`) and job execution logic (`job_runner.go`).
+
 2026-07-20:
 ### Major Changes
 - **Orchestrator Rewrite:** The Orchestrator component has been completely rewritten from Node.js/TypeScript to Go for improved performance and concurrency.

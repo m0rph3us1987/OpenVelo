@@ -66,11 +66,28 @@ WORKDIR /app
 # depends on this version's session-update behavior.
 RUN npm install -g @kilocode/cli@7.3.45 \
  	&& npm install typescript \
- 	&& npm install -g @playwright/mcp
+ 	&& npm install -g @playwright/mcp \
+ 	&& npx playwright install chrome \
+ 	&& npx playwright install chromium
 
 # Configure Playwright to use the system Chromium and skip downloading its own
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Add global wrappers for ALL chromium/chrome executables to suppress popups
+RUN mv /usr/bin/chromium /usr/bin/chromium-real \
+    && echo '#!/bin/bash\nexec /usr/bin/chromium-real --test-type --disable-infobars --disable-session-crashed-bubble "$@"' > /usr/bin/chromium \
+    && chmod +x /usr/bin/chromium \
+    && if [ -f /usr/bin/google-chrome ]; then \
+           mv /usr/bin/google-chrome /usr/bin/google-chrome-real \
+           && echo '#!/bin/bash\nexec /usr/bin/google-chrome-real --test-type --disable-infobars --disable-session-crashed-bubble "$@"' > /usr/bin/google-chrome \
+           && chmod +x /usr/bin/google-chrome; \
+       fi \
+    && find /root/.cache/ms-playwright/ -type f \( -name "chrome" -o -name "chromium" \) -executable | while read f; do \
+           mv "$f" "$f-real" \
+           && echo '#!/bin/bash\nexec "'"$f-real"'" --test-type --disable-infobars --disable-session-crashed-bubble "$@"' > "$f" \
+           && chmod +x "$f"; \
+       done
 
 
 # Set global Git configuration

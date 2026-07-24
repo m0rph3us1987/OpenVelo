@@ -3,3 +3,10 @@ Implement the plan you wrote at `{{PLAN_PATH}}` in the previous turn.
 The SKILLS, architecture conventions, and story from the planning turn are already in your conversation history — do not reload them.
 
 Before coding, call `todowrite` once with the list of logical units you intend to do (one per top-level `## N.` section of the plan, per file, or per coherent step — pick the granularity that makes your progress legible). All items start with `status: "pending"`. As you work, call `todowrite` again each time you switch tasks: mark the finished item `completed`, set the next item to `in_progress` (only one at a time). The web-UI renders this panel; populating it is required.
+## Running Background Servers
+If you need to start a web server or dev server (e.g., `npm run dev`) to manually test your code, **do NOT run it natively** (e.g. `npm run dev` or `npm start &`). Running a server natively blocks your bash tool and causes your turn to timeout and fail.
+You MUST use `/app/mcp/run.sh <command>` (e.g., `/app/mcp/run.sh npm run dev`). This correctly detaches the process and logs its output so your tool call returns immediately.
+To stop a background server, use `/app/mcp/stop.sh <pattern>` (e.g., `/app/mcp/stop.sh node`). Never use `pkill` or `killall` directly.
+
+## Git Ignore
+You MUST always ensure that `.kilo/` is added to the repository's `.gitignore` file. If `.gitignore` does not exist, create it and add `.kilo/`. If it exists, append `.kilo/` if it is not already present.

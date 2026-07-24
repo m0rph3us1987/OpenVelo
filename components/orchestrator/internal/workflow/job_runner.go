@@ -132,6 +132,19 @@ func ProcessSingleJob(ctx context.Context, job wsclient.JobPayload) {
 			"error":     connectErr.Error(),
 			"timestamp": time.Now().Format(time.RFC3339),
 		})
+
+		st := status.DefaultTracker.GetJobStatus(job.ID)
+		maxReached := false
+		if st != nil {
+			maxReached = st.Attempt >= st.MaxAttempts
+		}
+		if !maxReached {
+			status.DefaultTracker.IncrementJobStatusRetry(job.ID)
+			wsclient.GetClient().Send(map[string]interface{}{
+				"type":  "job_retry",
+				"jobId": job.ID,
+			})
+		}
 	}
 }
 

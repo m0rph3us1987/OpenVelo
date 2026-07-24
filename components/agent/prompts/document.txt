@@ -13,7 +13,7 @@ Therefore, your goal is to write documentation that serves as:
 
 ## 1. Conformance to OKF v0.1 Specification
 To be fully conformant with OKF v0.1, you must follow these rules:
-*   **Directory:** All documentation files must live under `{{REPO_PATH}}/.openvelo/docs/`.
+*   **Directory:** All documentation files must live under `{{REPO_PATH}}/docs/`.
 *   **Concept Files:** Each unit of knowledge is a **Concept** (e.g., `backup.md`).
 *   **YAML Frontmatter:** Every concept file **MUST** begin with a YAML frontmatter block delimited by `---` containing:
     *   `type` (REQUIRED): A short string describing the kind of concept (e.g. `architecture`, `guide`, `api`, `database`).
@@ -81,7 +81,7 @@ To be fully conformant with OKF v0.1, you must follow these rules:
     ```
 
 ## 2. Main Index File (index.md)
-*   You **MUST** maintain `{{REPO_PATH}}/.openvelo/docs/index.md` as the bundle catalog / table of contents to support progressive disclosure.
+*   You **MUST** maintain `{{REPO_PATH}}/docs/index.md` as the bundle catalog / table of contents to support progressive disclosure.
 *   The bundle-root `index.md` **MUST** declare the OKF version in its frontmatter:
     ```yaml
     ---
@@ -131,6 +131,6 @@ Keep files focused, clear, and easy to parse by both humans and AI agents. Do NO
 
 Follow these steps in order:
 1. **Explore the Repository**: Use your file globbing, grep, and reading tools to inspect the repository code. Identify all database schemas, API routes, user-facing views, and workflows.
-2. **Create/Update Concept Files**: For each unit of knowledge, use your file writing tool to create/update a Markdown file under `{{REPO_PATH}}/.openvelo/docs/`. Do NOT output the file contents in your chat response — you MUST write them directly to the disk using your file tools.
-3. **Maintain the Index**: Create or update the index file at `{{REPO_PATH}}/.openvelo/docs/index.md` to list and link all active concept files.
+2. **Create/Update Concept Files**: For each unit of knowledge, use your file writing tool to create/update a Markdown file under `{{REPO_PATH}}/docs/`. Do NOT output the file contents in your chat response — you MUST write them directly to the disk using your file tools.
+3. **Maintain the Index**: Create or update the index file at `{{REPO_PATH}}/docs/index.md` to list and link all active concept files.
 4. **Conclude**: Provide a brief summary of the documentation files you created or updated in your final chat response and stop.

@@ -225,89 +225,130 @@ export class WorkflowEngine {
             const MAX_RETRIES = CONFIG.MAX_RETRIES;
 
             while (true) {
-                if (stage === 'blueprinting') {
-                    retryCount++;
-                    if (retryCount > MAX_RETRIES) {
-                        throw new Error('Max retries reached: blueprinting stage failed.');
-                    }
-                    AgentStatus.set('blueprinting', retryCount, MAX_RETRIES);
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    console.log('##############   BLUEPRINT  ###################');
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    // Reuse the existing plan+implement session on
-                    // retries; pass null on the first call to create
-                    // a new one. runPlan mode-switches back to plan
-                    // internally.
-                    const result = await this.runPlan(whatToImplement, planSessionId);
-                    if (result.success) {
-                        planSessionId = result.sessionId;
-                        stage = 'implementing';
-                        continue;
-                    }                    
-                    continue;
-                }
-
-                if (stage === 'implementing') {
-                    AgentStatus.set('implementing', retryCount, MAX_RETRIES);
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    console.log('##############   IMPLEMENT  ###################');
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    if (!planSessionId) {
-                        throw new Error('implement stage reached without a plan session id');
-                    }
-                    // Pass the ORIGINAL story so the implementer
-                    // keeps the implementation coherent with the
-                    // broader requirements (even on retries where
-                    // whatToImplement is a failure context).
-                    const result = await this.runImplement(planSessionId, originalStory);
-                    if (result.success) {
-                        stage = 'testing';
+                try {
+                    if (stage === 'blueprinting') {
+                        retryCount++;
+                        if (retryCount > MAX_RETRIES) {
+                            throw new Error('Max retries reached: blueprinting stage failed.');
+                        }
+                        AgentStatus.set('blueprinting', retryCount, MAX_RETRIES);
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        console.log('##############   BLUEPRINT  ###################');
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        // Reuse the existing plan+implement session on
+                        // retries; pass null on the first call to create
+                        // a new one. runPlan mode-switches back to plan
+                        // internally.
+                        const result = await this.runPlan(whatToImplement, planSessionId);
+                        if (result.success) {
+                            planSessionId = result.sessionId;
+                            stage = 'implementing';
+                            continue;
+                        }                    
                         continue;
                     }
-                    // Keep the same session — mode-switch back to
-                    // plan in the next blueprinting iteration.
-                    stage = 'blueprinting';
-                    continue;
-                }
 
-                if (stage === 'testing') {
-                    AgentStatus.set('testing', retryCount, MAX_RETRIES);
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    console.log('##############     TEST     ###################');
-                    console.log('###############################################');
-                    console.log('###############################################');
-                    const result = await this.runBuildAndTest();
-                    if (result.success) {
-                        stage = 'reviewing';
+                    if (stage === 'implementing') {
+                        AgentStatus.set('implementing', retryCount, MAX_RETRIES);
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        console.log('##############   IMPLEMENT  ###################');
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        if (!planSessionId) {
+                            throw new Error('implement stage reached without a plan session id');
+                        }
+                        // Pass the ORIGINAL story so the implementer
+                        // keeps the implementation coherent with the
+                        // broader requirements (even on retries where
+                        // whatToImplement is a failure context).
+                        const result = await this.runImplement(planSessionId, originalStory);
+                        if (result.success) {
+                            stage = 'testing';
+                            continue;
+                        }
+                        // Keep the same session — mode-switch back to
+                        // plan in the next blueprinting iteration.
+                        stage = 'blueprinting';
                         continue;
                     }
-                    // Keep the same session — runPlan will mode-switch
-                    // it back to plan on the next blueprinting iteration
-                    // and re-plan with the test error log.
-                    whatToImplement =
-                        `Build/test failed with:\n\n${result.errorLog}\n\n` +
-                        `Fix all remaining errors. Do not revert any previously applied fix.`;
-                    stage = 'blueprinting';
-                    continue;
-                }
 
-                if (stage === 'reviewing') {
-                    AgentStatus.set('reviewing', retryCount, MAX_RETRIES);
-                    const result = await this.runReview();
-                    if (result.success) {
-                        break;
+                    if (stage === 'testing') {
+                        AgentStatus.set('testing', retryCount, MAX_RETRIES);
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        console.log('##############     TEST     ###################');
+                        console.log('###############################################');
+                        console.log('###############################################');
+                        const result = await this.runBuildAndTest();
+                        if (result.success) {
+                            stage = 'reviewing';
+                            continue;
+                        }
+                        // Keep the same session — runPlan will mode-switch
+                        // it back to plan on the next blueprinting iteration
+                        // and re-plan with the test error log.
+                        whatToImplement =
+                            `Build/test failed with:\n\n${result.errorLog}\n\n` +
+                            `Fix all remaining errors. Do not revert any previously applied fix.`;
+                        stage = 'blueprinting';
+                        continue;
                     }
-                    // Keep the same session — runPlan will mode-switch
-                    // it back to plan on the next blueprinting iteration
-                    // and re-plan with the review repair hint.
-                    whatToImplement = result.repairHint;
-                    stage = 'blueprinting';
-                    continue;
+
+                    if (stage === 'reviewing') {
+                        AgentStatus.set('reviewing', retryCount, MAX_RETRIES);
+                        const result = await this.runReview();
+                        if (result.success) {
+                            break;
+                        }
+                        // Keep the same session — runPlan will mode-switch
+                        // it back to plan on the next blueprinting iteration
+                        // and re-plan with the review repair hint.
+                        whatToImplement = result.repairHint;
+                        stage = 'blueprinting';
+                        continue;
+                    }
+                } catch (err: any) {
+                    if (err.message.includes('kilo acp exited') || err.message.includes('Orchestrator disconnected')) {
+                        console.warn(`[engine] kilo acp crashed (${err.message}). Restarting ACP process...`);
+
+                        // 1. Restart the ACP process
+                        this.client = await ACPClient.init({
+                            cwd: CONFIG.REPO_PATH,
+                            acpCwd: toAgentPath(CONFIG.REPO_PATH),
+                            useWineBridge: IS_WINE,
+                            turnInactivityTimeoutMs: CONFIG.AGENT_MAX_TIMEOUT > 0
+                                ? CONFIG.AGENT_MAX_TIMEOUT * 1000
+                                : 0,
+                        });
+
+                        // 2. Reopen the last session & tell AI to resume
+                        if (stage === 'implementing' && planSessionId) {
+                            console.log(`[engine] Reopening session ${planSessionId} to resume...`);
+
+                            // Reopen the session 
+                            const session = await this.client.createSession({
+                                model: CONFIG.BACKEND_MODEL,
+                                mode: MODE_CODE,
+                                sessionId: planSessionId
+                            });
+
+                            // Send the resume prompt
+                            await session.sendMessage("The process crashed. Please continue/resume from where you left off. Do not revert previous work.");
+
+                            // Advance to testing as the agent finishes this resume turn
+                            stage = 'testing';
+                            continue;
+                        }
+
+                        // If it crashed in other stages, retry the stage
+                        continue;
+                    }
+
+                    // If it's a different error, bubble it up
+                    throw err;
                 }
             }
 

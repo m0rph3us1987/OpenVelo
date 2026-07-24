@@ -365,23 +365,39 @@ export class WorkflowEngine {
             // --- 1a. Task Generation / Planning session -----------------------
             AgentStatus.set('planning', 1, 1);
             // Spawn as a 'code'-mode session so the agent can write files to the filesystem.
-            const planSession = await this.createSession('code');
-            lastSessionId = planSession.id;
-            console.log(`[test] starting Task Generation session ${planSession.id} (MCP=${CONFIG.MCP_TRANSPORT})`);
-
             const planPrompt = renderTemplate('test_plan.md', {
                 TEST_PLAN: CONFIG.TEST_PLAN,
                 REPO_PATH: CONFIG.REPO_PATH,
                 PASSED_TESTS: CONFIG.PASSED_TESTS || '[]',
             });
-            try {
-                await planSession.sendMessage(planPrompt);
-            } catch (err: any) {
-                await this.safeClose(planSession);
-                return { ok: false, sessionId: planSession.id, error: `task generation sendMessage failed: ${err.message}` };
+
+            let planRetries = 0;
+            let planSuccess = false;
+            while (planRetries <= 2) {
+                let planSession: ACPSession | null = null;
+                try {
+                    planSession = await this.createSession('code');
+                    lastSessionId = planSession.id;
+                    console.log(`[test] starting Task Generation session ${planSession.id} (MCP=${CONFIG.MCP_TRANSPORT})`);
+                    await planSession.sendMessage(planPrompt);
+                    await this.safeClose(planSession);
+                    planSuccess = true;
+                    break;
+                } catch (err: any) {
+                    if (planSession) await this.safeClose(planSession);
+                    if (err.message.includes('kilo acp exited') || err.message.includes('Orchestrator disconnected')) {
+                        console.warn(`[test] kilo acp crashed (${err.message}). Restarting ACP process for planning...`);
+                        this.client = null;
+                        planRetries++;
+                        continue;
+                    }
+                    return { ok: false, sessionId: lastSessionId, error: `task generation sendMessage failed: ${err.message}` };
+                }
             }
 
-            await this.safeClose(planSession);
+            if (!planSuccess) {
+                return { ok: false, sessionId: lastSessionId, error: `task generation failed after retries` };
+            }
 
             // Read the generated plan.json file from /tmp/tests/plan.json
             const planPath = path.join(testFilesDir, 'plan.json');
@@ -490,32 +506,59 @@ export class WorkflowEngine {
                 PLAN_STATE: JSON.stringify(testPlan, null, 2),
             });
 
-            const session = await this.createSession('code');
-            lastSessionId = session.id;
+            let taskRetries = 0;
+            const MAX_TASK_RETRIES = 2;
+            let sessionSuccess = false;
 
-            // Re-publish the captured plan to the live panel with the current entry marked in_progress.
-            AgentStatus.setPlanEntries(entries.map((e, j): PlanEntry => ({
-                content: e.content,
-                priority: e.priority,
-                status: j < i ? 'completed' : j === i ? 'in_progress' : 'pending',
-            })));
+            while (taskRetries <= MAX_TASK_RETRIES) {
+                let session: ACPSession | null = null;
+                try {
+                    session = await this.createSession('code');
+                    lastSessionId = session.id;
 
-            console.log(`[test] task ${t.id} (${i + 1}/${testPlan.tasks.length}): fresh session ${session.id}`);
-            try {
-                await session.sendMessage(entryPrompt);
-            } catch (err: any) {
-                await this.safeClose(session);
+                    // Re-publish the captured plan to the live panel with the current entry marked in_progress.
+                    AgentStatus.setPlanEntries(entries.map((e, j): PlanEntry => ({
+                        content: e.content,
+                        priority: e.priority,
+                        status: j < i ? 'completed' : j === i ? 'in_progress' : 'pending',
+                    })));
+
+                    console.log(`[test] task ${t.id} (${i + 1}/${testPlan.tasks.length}): fresh session ${session.id}`);
+                    await session.sendMessage(entryPrompt);
+                    await this.safeClose(session);
+                    sessionSuccess = true;
+                    break;
+                } catch (err: any) {
+                    if (session) await this.safeClose(session);
+                    if (err.message.includes('kilo acp exited') || err.message.includes('Orchestrator disconnected')) {
+                        console.warn(`[test] kilo acp crashed (${err.message}). Restarting ACP process for task ${t.id}...`);
+                        this.client = null;
+                        taskRetries++;
+                        continue;
+                    }
+                    
+                    t.verdict = 'fail';
+                    t.summary = `Session send message failed: ${err.message}`;
+                    // Save current state of plan.json to disk before returning
+                    fs.writeFileSync(path.join(testFilesDir, 'plan.json'), JSON.stringify(testPlan, null, 2), 'utf-8');
+                    return {
+                        ok: false,
+                        sessionId: lastSessionId,
+                        error: `task ${t.id} sendMessage failed: ${err.message}`,
+                    };
+                }
+            }
+
+            if (!sessionSuccess) {
                 t.verdict = 'fail';
-                t.summary = `Session send message failed: ${err.message}`;
-                // Save current state of plan.json to disk before returning
+                t.summary = `Session failed after ${MAX_TASK_RETRIES} retries due to crashes.`;
                 fs.writeFileSync(path.join(testFilesDir, 'plan.json'), JSON.stringify(testPlan, null, 2), 'utf-8');
                 return {
                     ok: false,
-                    sessionId: session.id,
-                    error: `task ${t.id} sendMessage failed: ${err.message}`,
+                    sessionId: lastSessionId,
+                    error: `task ${t.id} failed after retries.`,
                 };
             }
-            await this.safeClose(session);
 
             if (!fs.existsSync(verdictFile)) {
                 t.verdict = 'fail';
@@ -524,7 +567,7 @@ export class WorkflowEngine {
                 fs.writeFileSync(path.join(testFilesDir, 'plan.json'), JSON.stringify(testPlan, null, 2), 'utf-8');
                 return {
                     ok: false,
-                    sessionId: session.id,
+                    sessionId: lastSessionId,
                     error: `task ${t.id} produced no verdict file at ${verdictFile}`,
                 };
             }
@@ -553,7 +596,7 @@ export class WorkflowEngine {
                 fs.writeFileSync(path.join(testFilesDir, 'plan.json'), JSON.stringify(testPlan, null, 2), 'utf-8');
                 return {
                     ok: false,
-                    sessionId: session.id,
+                    sessionId: lastSessionId,
                     error: `task ${t.id} produced invalid verdict JSON: ${err.message}`,
                 };
             }
@@ -627,14 +670,32 @@ export class WorkflowEngine {
 
         try { fs.unlinkSync(CONFIG.VERDICT_PATH); } catch { /* ignore */ }
 
-        const session = await this.createSession('code');
-        console.log(`[verdict] starting ACP session ${session.id}`);
         let sendErr = '';
-        try {
-            await session.sendMessage(sysPrompt);
-        } catch (err: any) {
-            sendErr = err.message;
-            console.error(`[verdict] sendMessage failed: ${err.message}`);
+        let lastSessionId = '';
+        let verdictRetries = 0;
+        
+        while (verdictRetries <= 2) {
+            let session: ACPSession | null = null;
+            try {
+                session = await this.createSession('code');
+                lastSessionId = session.id;
+                console.log(`[verdict] starting ACP session ${session.id}`);
+                await session.sendMessage(sysPrompt);
+                await this.safeClose(session);
+                sendErr = '';
+                break;
+            } catch (err: any) {
+                if (session) await this.safeClose(session);
+                if (err.message.includes('kilo acp exited') || err.message.includes('Orchestrator disconnected')) {
+                    console.warn(`[verdict] kilo acp crashed (${err.message}). Restarting ACP process...`);
+                    this.client = null;
+                    verdictRetries++;
+                    continue;
+                }
+                sendErr = err.message;
+                console.error(`[verdict] sendMessage failed: ${err.message}`);
+                break;
+            }
         }
 
         // Preferred path: the agent wrote /tmp/verdict.json.
@@ -644,7 +705,7 @@ export class WorkflowEngine {
                 ok: true,
                 verdict: v.verdict,
                 summary: v.summary,
-                sessionId: session.id,
+                sessionId: lastSessionId,
             };
         }
 
@@ -663,7 +724,7 @@ export class WorkflowEngine {
             ok: true,
             verdict: agg.verdict,
             summary: agg.summary,
-            sessionId: session.id,
+            sessionId: lastSessionId,
         };
     }
 }

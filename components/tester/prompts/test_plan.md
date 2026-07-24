@@ -20,6 +20,7 @@ This session runs in **code mode**. Your ONLY job in this turn is to determine w
 
 2. **Generate Plan**:
    - Define a list of clear, self-contained, and actionable test tasks covering what needs to be tested.
+   - **IMPORTANT: Avoid excessive granularity.** Do NOT create a separate task for every single bullet point or micro-verification. Group related steps (e.g., creating an item, editing it, and deleting it) into a single, cohesive end-to-end task. Aim for around 3 to 7 broader tasks per job to minimize the overhead of restarting the test environment for every minor step.
    - You must write a SINGLE JSON file to the path `/tmp/tests/plan.json`.
    - Make sure `/tmp/tests/` directory exists (you can create it if needed, or it is pre-created by the runner).
 

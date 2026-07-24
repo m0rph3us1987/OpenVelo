@@ -338,6 +338,13 @@ func runJobWebSocket(ctx context.Context, jobID int64, containerID, host string,
 			_ = docker.GetManager().RemoveAgent(ctx, containerID)
 		}
 	} else if !DefaultManager.IsShuttingDown() {
+		wsclient.GetClient().Send(map[string]interface{}{
+			"type":      "job_update",
+			"jobId":     jobID,
+			"status":    "FAILED",
+			"error":     fmt.Sprintf("%s container crashed abruptly", kind),
+			"timestamp": time.Now().Format(time.RFC3339),
+		})
 		status.DefaultTracker.IncrementJobStatusRetry(jobID)
 		wsclient.GetClient().Send(map[string]interface{}{
 			"type":  "job_retry",

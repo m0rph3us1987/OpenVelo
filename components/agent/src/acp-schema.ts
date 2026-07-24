@@ -375,6 +375,7 @@ export interface InitializeResult {
 export interface SessionNewParams {
     cwd: string;
     mcpServers: McpServer[];
+    sessionId?: SessionId;
     _meta?: Record<string, unknown> | null;
 }
 

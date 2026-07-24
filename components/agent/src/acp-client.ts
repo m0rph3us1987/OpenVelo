@@ -114,6 +114,8 @@ export interface ACPSessionConfig {
     reasoningEffort?: 'low' | 'medium' | 'high';
     /** Optional MCP servers to attach to the session. */
     mcpServers?: Array<{ name: string; transport?: unknown }>;
+    /** Optional existing session ID to reopen/resume. */
+    sessionId?: string;
 }
 
 export interface ACPToolCall {
@@ -778,6 +780,7 @@ export class ACPClient {
         const result = await this.rpc.sendRequest<SessionNewResult>('session/new', {
             cwd: this.acpCwd,
             mcpServers: config.mcpServers ?? [],
+            sessionId: config.sessionId,
         });
         const sessionId = result.sessionId;
 
